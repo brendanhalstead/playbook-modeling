@@ -24,11 +24,22 @@ times:
 # Speed multipliers at each milestone
 speedups:
   PRESENT_DAY: 1.07
-  SC: 5
-  SAR: 25
-  SIAR: 250
-  ASI: 2000
-  WS: 10000 # currently unused
+  # Other milestones are now sampled from distributions below
+
+# Speedup distributions (80% confidence intervals for log-normal distributions)
+speedup_distributions:
+  SC: [3.7, 9]        # Absolute speedup for Superhuman Coder
+  SAR_ratio: [3, 7]   # Ratio of SAR speedup to SC speedup
+  SIAR_ratio: [8, 15] # Ratio of SIAR speedup to SAR speedup
+  ASI_ratio: [4, 10]  # Ratio of ASI speedup to SIAR speedup
+
+# Correlation matrix for the log of the speedup distributions above.
+# The order is SC, SAR_ratio, SIAR_ratio, ASI_ratio
+speedup_correlation_matrix:
+  - [1.0, 0.7, 0.7, 0.7]  # SC
+  - [0.7, 1.0, 0.7, 0.7]  # SAR_ratio
+  - [0.7, 0.7, 1.0, 0.7]  # SIAR_ratio
+  - [0.7, 0.7, 0.7, 1.0]  # ASI_ratio
 
 # Projects/actors configuration
 # Limitation: For now the initial software months behind can't be more than 24 months.
@@ -43,18 +54,20 @@ projects:
     initial_software_months_behind: [1, 0, 0, 0]
     initial_hardware_multiple: [0, 1, 1, 1]
     software_progress_rate: [0, 1, 1, 1]
-  "20x less hardware, uncertainty about rest": 
-    initial_software_months_behind: [0, 1, 18, 24]
-    initial_hardware_multiple: [0, 0.2, 0.2, 0.2]
-    software_progress_rate: [0, 0.01, 0.35, 1]
-  "100x less hardware, uncertainty about rest": 
-    initial_software_months_behind: [0, 1, 18, 24]
-    initial_hardware_multiple: [0, 0.01, 0.01, 0.01]
-    software_progress_rate: [0, 0.0025, 0.15, 1]
-  # "Russia (not closely considered)": 
+  # "20x less hardware, uncertainty about rest": 
   #   initial_software_months_behind: [0, 1, 18, 24]
-  #   initial_hardware_multiple: [0, 0.005, 0.2, 0.4]
-  #   software_progress_rate: [0, 0.04, 0.5, 1]
+  #   initial_hardware_multiple: [0, 0.2, 0.2, 0.2]
+  #   software_progress_rate: [0, 0.01, 0.35, 1]
+  # "100x less hardware, uncertainty about rest": 
+  #   initial_software_months_behind: [0, 1, 18, 24]
+  #   initial_hardware_multiple: [0, 0.01, 0.01, 0.01]
+  #   software_progress_rate: [0, 0.0025, 0.15, 1]
+  "Russia (not closely considered)": 
+    initial_software_months_behind: [0, 1, 18, 24]
+    initial_hardware_multiple: [0, 0.01, 0.2, 0.4]
+    software_progress_rate: [0, 0.04, 0.5, 1]
+    no_resupply: true
+    failure_model: default_weibull
   # "Open Source Collective (not closely considered)":
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.002, 0.05, 0.4]
@@ -78,3 +91,14 @@ plotting_style:
       dark: "#484848"
       light: "rgb(0, 200, 0, 0.3)"
     default: "#000000"
+
+# Failure models describing GPU attrition
+failure_models:
+  default_weibull:
+    type: weibull   # Weibull distribution for device lifetime
+    beta_infant: 1.0       # shape parameter 
+    eta_years_infant: 11.0 # scale (≈9 % annual failure)
+    beta_adult: 1.0       # shape parameter (~constant hazard)
+    eta_years_adult: 5.6 # scale (≈9 % annual failure)
+    beta_elderly: 1.0       # shape parameter (~constant hazard)
+    eta_years_elderly: 11.0 # scale (≈9 % annual failure)

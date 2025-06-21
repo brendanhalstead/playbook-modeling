@@ -49,7 +49,7 @@ def lookup_research_stock_by_date(trajectory_data: dict, target_date: datetime, 
     
     return trajectory[closest_idx]["median_research_stock"]
 
-def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_data: dict) -> dict:
+def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_data: dict, sc_speedup_samples: np.ndarray | None = None) -> dict:
     """Generate correlated samples for project parameters."""
     project_samples = {}
     projects = list(config["projects"].keys())
@@ -74,8 +74,6 @@ def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_
     # For non-leading projects, generate correlated software progress rates
     software_progress_correlation = 0.5  # Moderate correlation between non-leading projects
     hardware_software_correlation = 0.8  # High correlation within each project
-    
-    # Generate correlated samples for non-leading projects' software progress rates
     if len(non_leading_projects) > 1:
         # Create correlation matrix for software progress rates of non-leading projects
         n_non_leading = len(non_leading_projects)
@@ -160,11 +158,9 @@ def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_
         
         for i in range(n_sims):
             # (a) Calculate adjusted software target based on hardware multiple
-            if initial_hardware_multiple[i] > 0:
-                adjustment_factor = all_doublings - (all_doublings - software_only_doublings) * (np.log((4.5**2)*initial_hardware_multiple[i]) / np.log(4.5**2))
-                software_targets[i] = research_stock_at_present_day * (2 ** adjustment_factor)
-            else:  
-                software_targets[i] = software_research_stock_at_sc  # Fallback to default
+            assert initial_hardware_multiple[i] > 0 # idk, the AI was concerned about this
+            adjustment_factor = all_doublings - (all_doublings - software_only_doublings) * (np.log((4.5**2)*initial_hardware_multiple[i]) / np.log(4.5**2))
+            software_targets[i] = research_stock_at_present_day * (2 ** adjustment_factor)
             
             # (b) Calculate current software stock based on months behind
             months_behind = initial_software_months_behind[i]
@@ -182,12 +178,14 @@ def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_
                 doublings_achieved = max(0, np.log2(max(current_software_stocks[i] / research_stock_at_present_day, 1)))
                 progress_ratio = min(doublings_achieved / total_doublings_needed, 1.0) if total_doublings_needed > 0 else 0
                 
-                # Exponential interpolation between PRESENT_DAY speed (1.07) and SC speed (5)
+                # Exponential interpolation between PRESENT_DAY speed (1.07) and SC speed
                 present_day_speed = config["speedups"]["PRESENT_DAY"]
-                sc_speed = config["speedups"]["SC"]
+                
+                sc_speed = sc_speedup_samples[i]
+
                 initial_speedups[i] = present_day_speed * (sc_speed / present_day_speed) ** progress_ratio
             else:
-                initial_speedups[i] = config["speedups"]["SC"]  # Already at SC
+                initial_speedups[i] = sc_speedup_samples[i] # Already at SC
         
         project_samples[project_name] = {
             "initial_software_months_behind": initial_software_months_behind,
@@ -196,28 +194,22 @@ def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_
             "software_target": software_targets,
             "current_software_stock": current_software_stocks,
             "remaining_human_only_years": remaining_human_only_years,
-            "initial_speedup": initial_speedups
+            "initial_speedup": initial_speedups,
+            # new fields for hardware decay
+            "no_resupply": params.get("no_resupply", False),
+            "failure_model_params": (
+                config.get("failure_models", {}).get(params.get("failure_model"))
+                if params.get("failure_model") else None
+            )
         }
     
     return project_samples
 
-def get_project_progress_samples(config: dict, n_sims: int) -> dict:
-    """Generate progress rate samples for each project using lognormal distributions with ceilings."""
-    # Load trajectory data for the new calculation
-    trajectory_data = load_research_trajectory_data("research_trajectory_data.json")
-    
-    # Use the new correlated sampling function
-    project_samples = get_project_samples_with_correlations(config, n_sims, trajectory_data)
-    
-    # Return just the software progress rates for compatibility with existing code
-    progress_rates = {}
-    for project_name, samples in project_samples.items():
-        progress_rates[project_name] = samples["software_progress_rate"]
-    
-    return progress_rates
-
 def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
-    """Generate samples for milestone timings and speeds with correlation between gap sizes."""
+    """
+    Generate samples for milestone timings with correlation between gap sizes.
+    Currently does NOT sample for speedups, just returns the fixed values defined in the config.
+    """
     samples = {}
     
     # Parse starting time
@@ -324,10 +316,42 @@ def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -
     # Store speedup values
     samples["speeds"] = {}
     
-    # Store fixed speedup values for other milestones
-    for milestone, speed in config["speedups"].items():
-        samples["speeds"][milestone] = speed
-    
+    # Handle fixed PRESENT_DAY speedup
+    if "speedups" in config and "PRESENT_DAY" in config["speedups"]:
+        samples["speeds"]["PRESENT_DAY"] = config["speedups"]["PRESENT_DAY"]
+
+    # Sample correlated speedups for other milestones
+    if "speedup_distributions" in config and "speedup_correlation_matrix" in config:
+        speedup_dists_config = config["speedup_distributions"]
+        speedup_corr_matrix = np.array(config["speedup_correlation_matrix"])
+        
+        milestone_ratios = list(speedup_dists_config.keys())
+        n_speedup_vars = len(milestone_ratios)
+        
+        # Generate correlated uniform samples
+        mean_speedups = np.zeros(n_speedup_vars)
+        correlated_normal_speedups = np.random.multivariate_normal(mean_speedups, speedup_corr_matrix, size=n_sims)
+        uniform_samples_speedups = norm.cdf(correlated_normal_speedups)
+        
+        # Create distributions and sample from them
+        dists = {name: get_lognormal_from_80_ci(*speedup_dists_config[name]) for name in milestone_ratios}
+        
+        sc_samples = dists["SC"].ppf(uniform_samples_speedups[:, 0])
+        sar_ratio_samples = dists["SAR_ratio"].ppf(uniform_samples_speedups[:, 1])
+        siar_ratio_samples = dists["SIAR_ratio"].ppf(uniform_samples_speedups[:, 2])
+        asi_ratio_samples = dists["ASI_ratio"].ppf(uniform_samples_speedups[:, 3])
+        
+        # Enforce non-decreasing speedups by ensuring ratios are >= 1, then calculate absolute values
+        samples["speeds"]["SC"] = sc_samples
+        samples["speeds"]["SAR"] = samples["speeds"]["SC"] * np.maximum(1, sar_ratio_samples)
+        samples["speeds"]["SIAR"] = samples["speeds"]["SAR"] * np.maximum(1, siar_ratio_samples)
+        samples["speeds"]["ASI"] = samples["speeds"]["SIAR"] * np.maximum(1, asi_ratio_samples)
+    else:
+        # Fallback to old fixed values if new config is not present
+        for milestone, speed in config.get("speedups", {}).items():
+            if milestone != "PRESENT_DAY":
+                samples["speeds"][milestone] = speed
+
     return samples
 
 def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progress_rate: float = 1.0, milestone_pair: str = None) -> float:
@@ -468,7 +492,7 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
     Args:
         samples: Milestone timing samples
         sim_idx: Simulation index
-        project_progress_samples: Dictionary mapping project names to arrays of progress rate samples
+        project_progress_samples: Dictionary mapping project names to arrays of software progress rate samples
         project_samples: Full project samples with remaining years and initial speedups (optional)
     
     Returns:
@@ -531,20 +555,24 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     print("Loading research trajectory data...")
     trajectory_data = load_research_trajectory_data("research_trajectory_data.json")
     
+    # Generate samples (shared across all projects), including the new speedup distributions
+    print("\nGenerating milestone samples...")
+    samples = get_milestone_samples(config, config["simulation"]["n_sims"])
+
     print("\nGenerating project samples with correlations...")
-    project_samples = get_project_samples_with_correlations(config, config["simulation"]["n_sims"], trajectory_data)
+    project_samples = get_project_samples_with_correlations(config, config["simulation"]["n_sims"], trajectory_data, samples["speeds"]["SC"])
     
-    # Generate project progress rate samples for compatibility
-    print("\nGenerating project progress rate samples...")
-    project_progress_samples = get_project_progress_samples(config, config["simulation"]["n_sims"])
+    # Derive project progress samples from the full project_samples for compatibility
+    print("\nDeriving project progress rate samples...")
+    project_progress_samples = {name: data["software_progress_rate"] for name, data in project_samples.items()}
     
     # Print statistics for project parameters
     print("Project configurations:")
-    for project_name, samples in project_samples.items():
-        progress_rates = samples["software_progress_rate"]
-        hardware_multiples = samples["initial_hardware_multiple"] 
-        months_behind = samples["initial_software_months_behind"]
-        remaining_years = samples["remaining_human_only_years"]
+    for project_name, samples_data in project_samples.items():
+        progress_rates = samples_data["software_progress_rate"]
+        hardware_multiples = samples_data["initial_hardware_multiple"] 
+        months_behind = samples_data["initial_software_months_behind"]
+        remaining_years = samples_data["remaining_human_only_years"]
         
         print(f"  {project_name}:")
         print(f"    Progress rates: 10th={np.percentile(progress_rates, 10):.2f}x, 50th={np.percentile(progress_rates, 50):.2f}x, 90th={np.percentile(progress_rates, 90):.2f}x")
@@ -554,10 +582,6 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     
     # Set up fonts
     fonts = setup_plotting_style(plotting_style)
-    
-    # Generate samples (shared across all projects)
-    print("\nGenerating milestone samples...")
-    samples = get_milestone_samples(config, config["simulation"]["n_sims"])
     
     # Run multi-project simulations
     print("\nRunning multi-project simulations...")
@@ -662,8 +686,6 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     print(f"\nDoes Leading Project always win SAR? {leading_lab_always_wins}")
     if not leading_lab_always_wins:
         print("-> Other projects sometimes beat Leading Project!")
-    else:
-        print("-> Leading Project wins every time")
     
     # Create plots
     print("\nGenerating plots...")
@@ -1899,6 +1921,34 @@ def create_project_sar_timeline_plot(all_project_results: list[dict], config: di
     ax.tick_params(axis="both", labelsize=plotting_style["font"]["sizes"]["ticks"])
 
     return fig
+
+# Add helper to compute reliability based on failure model parameters
+
+def compute_reliability(t_days: float, model_params: dict | None) -> float:
+    """Return the reliability R(t) (fraction of GPUs still working) after t_days.
+
+    Currently only Weibull models are supported.  The YAML failure_models entry
+    should contain at least the keys:
+        type: "weibull"
+        beta: <float>
+        eta_years: <float>
+    If model_params is None or unsupported, this returns 1.0 (no attrition).
+    """
+    if not model_params:
+        return 1.0  # No attrition / unlimited resupply
+
+    model_type = model_params.get("type", "weibull").lower()
+
+    # Convert generic inputs
+    if model_type == "weibull":
+        beta = model_params.get("beta", 1.0)
+        eta_years = model_params.get("eta_years", 1.0)
+        eta_days = eta_years * 365.0
+        if eta_days <= 0:
+            return 1.0
+        return np.exp(- (t_days / eta_days) ** beta)
+    # Fallback – unsupported model
+    return 1.0
 
 if __name__ == "__main__":
     run_multi_project_takeoff_simulation()
