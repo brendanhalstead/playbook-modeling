@@ -27,6 +27,8 @@ speedups:
   # Other milestones are now sampled from distributions below
 
 # Speedup distributions (80% confidence intervals for log-normal distributions)
+# NOTE: the timelines forecast does not use uncertainty over SC, so 
+# the "present_day_to_sc_info" section may be incongrous with a given sample. Fix later.
 speedup_distributions:
   SC: [3.7, 9]        # Absolute speedup for Superhuman Coder
   SAR_ratio: [3, 7]   # Ratio of SAR speedup to SC speedup
@@ -50,10 +52,10 @@ speedup_correlation_matrix:
 # Limitation: We also assume that the software progress rate doesn't change over time, which likely isn't true e.g. the dynamics change as AI R&D gets more automated.
 # Format: [p_zero, lower_bound, upper_bound, ceiling] for 80% confidence interval of lognormal distribution
 projects:
-  "Leading Project (if full speed)":
-    initial_software_months_behind: [1, 0, 0, 0]
-    initial_hardware_multiple: [0, 1, 1, 1]
-    software_progress_rate: [0, 1, 1, 1]
+  # "Leading Project (if full speed)":
+  #   initial_software_months_behind: [1, 0, 0, 0]
+  #   initial_hardware_multiple: [0, 1, 1, 1]
+  #   software_progress_rate: [0, 1, 1, 1]
   # "20x less hardware, uncertainty about rest": 
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.2, 0.2, 0.2]
@@ -64,8 +66,9 @@ projects:
   #   software_progress_rate: [0, 0.0025, 0.15, 1]
   "Russia (not closely considered)": 
     initial_software_months_behind: [0, 1, 18, 24]
+    # initial_software_months_behind: [1, 0, 0, 0]
     initial_hardware_multiple: [0, 0.01, 0.2, 0.4]
-    software_progress_rate: [0, 0.04, 0.5, 1]
+    software_progress_rate: [0, 0.04, 0.5, 1] # constant over time in each sample
     no_resupply: true
     failure_model: default_weibull
   # "Open Source Collective (not closely considered)":
