@@ -64,11 +64,15 @@ projects:
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.01, 0.01, 0.01]
   #   software_progress_rate: [0, 0.0025, 0.15, 1]
-  "Russia (not closely considered)": 
+  "Russia (slowed by decay 5000d)": 
     initial_software_months_behind: [0, 1, 18, 24]
     # initial_software_months_behind: [1, 0, 0, 0]
     initial_hardware_multiple: [0, 0.01, 0.2, 0.4]
     software_progress_rate: [0, 0.04, 0.5, 1] # constant over time in each sample
+    schedule_params:
+      type: "decay"
+      start_date: "March 31 2027"
+      eta_days: 5000
     no_resupply: true
     failure_model: default_weibull
   # "Open Source Collective (not closely considered)":
@@ -94,6 +98,7 @@ plotting_style:
       dark: "#484848"
       light: "rgb(0, 200, 0, 0.3)"
     default: "#000000"
+
 
 # Failure models describing GPU attrition
 failure_models:

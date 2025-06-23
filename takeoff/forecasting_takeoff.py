@@ -187,10 +187,14 @@ def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_
             else:
                 initial_speedups[i] = sc_speedup_samples[i] # Already at SC
         
+        schedule_params = params["schedule_params"]
+        schedule_params["start_date"] = start_date
+
         project_samples[project_name] = {
             "initial_software_months_behind": initial_software_months_behind,
             "initial_hardware_multiple": initial_hardware_multiple,
             "software_progress_rate": software_progress_rate,
+            "schedule_params": schedule_params,
             "software_target": software_targets,
             "current_software_stock": current_software_stocks,
             "remaining_human_only_years": remaining_human_only_years,
@@ -354,7 +358,7 @@ def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -
 
     return samples
 
-def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progress_rate: float = 1.0, milestone_pair: str = None) -> float:
+def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progress_rate_schedule_params: dict, phase_start_date: datetime, milestone_pair: str = None) -> float:
     """Run simulation for a single phase with exponential speedup.
     
     Args:
@@ -368,11 +372,13 @@ def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progr
         Calendar days taken to complete the phase
     """
     dt = 1  # One day timesteps
-    calendar_time = 0
+    elapsed_days = 0
+    current_date = phase_start_date
     progress = 0
+    # print(current_date)
     
     # Cap to prevent overflow
-    MAX_CALENDAR_DAYS = 365 * 1000
+    MAX_CALENDAR_DAYS = 365 * 100
     
     while progress < gap:
         # Calculate current speedup based on progress through the phase
@@ -380,20 +386,28 @@ def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progr
         current_speedup = start_speed * (end_speed/start_speed)**progress_ratio
         
         # Make progress at varying speed, adjusted by progress_rate
+        assert elapsed_days < 366 * 1000
+        progress_rate = sw_progress_rate_schedule(current_date, progress_rate_schedule_params)
+
         progress += current_speedup * progress_rate * dt
-        calendar_time += dt
+        elapsed_days += dt
+        if current_date < datetime(9999, 12, 31):
+            try:
+                current_date += timedelta(days=dt)
+            except OverflowError:
+                current_date = datetime(9999, 12, 31)
         
-        if calendar_time > MAX_CALENDAR_DAYS:
-            print(f"Warning: Phase duration capped at {MAX_CALENDAR_DAYS/365:.1f} years")
+        if elapsed_days > MAX_CALENDAR_DAYS:
+            # print(f"Warning: Phase duration capped at {MAX_CALENDAR_DAYS/365:.1f} years")
             return MAX_CALENDAR_DAYS
     
-    return calendar_time
+    return elapsed_days
 
-def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_rate: float = 1.0, remaining_years_to_sc: float = None, initial_speedup: float = None) -> tuple[list[datetime], list[float]]:
+def run_single_simulation_with_tracking(milestone_samples: dict, sim_idx: int, progress_rate_schedule_params: dict, remaining_years_to_sc: float = None, initial_speedup: float = None) -> tuple[list[datetime], list[float]]:
     """Run a single simulation and track both milestone dates and phase durations.
     
     Args:
-        samples: Dictionary containing milestone samples
+        milestone_samples: Dictionary containing milestone samples
         sim_idx: Simulation index
         progress_rate: Rate at which this actor makes progress (1.0 = normal)
         remaining_years_to_sc: Calculated remaining human-only years to SC (new method)
@@ -401,7 +415,7 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_ra
     """
     milestone_dates = []
     phase_calendar_days = []
-    current_date = samples["start_time"]
+    current_date = milestone_samples["start_time"]
     
     # List of milestones in order (start from present day, work toward SC)
     milestones = ["SC", "SAR", "SIAR", "ASI"] # "WS"
@@ -417,20 +431,20 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_ra
             if initial_speedup is not None:
                 present_day_speed = initial_speedup
             else:
-                present_day_speed = samples["speeds"].get("PRESENT_DAY", 1.07)
+                present_day_speed = milestone_samples["speeds"].get("PRESENT_DAY", 1.07)
             
-            sc_speed = samples["speeds"]["SC"]
+            sc_speed = milestone_samples["speeds"]["SC"]
             if isinstance(sc_speed, np.ndarray):
                 sc_speed = sc_speed[sim_idx]
             
-            calendar_days = run_phase_simulation(remaining_gap_to_sc, present_day_speed, sc_speed, progress_rate, "PRESENT_DAY to SC")
+            calendar_days = run_phase_simulation(remaining_gap_to_sc, present_day_speed, sc_speed, progress_rate_schedule_params, current_date, "PRESENT_DAY to SC")
             phase_calendar_days.append(calendar_days)
             
             try:
-                current_date = current_date + pd.Timedelta(days=calendar_days)
+                current_date = current_date + timedelta(days=calendar_days)
                 if current_date.year > 9999:
                     current_date = datetime(9999, 12, 31)
-            except (OverflowError, pd.errors.OutOfBoundsTimedelta):
+            except OverflowError:
                 current_date = datetime(9999, 12, 31)
             
             milestone_dates.append(current_date)  # This is when SC is reached
@@ -447,28 +461,28 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_ra
     for i, milestone in enumerate(milestones[:-1]):
         next_milestone = milestones[i + 1]
         milestone_pair = f"{milestone} to {next_milestone}"
-        gap = samples["time_gaps"][milestone_pair][sim_idx]
+        gap = milestone_samples["time_gaps"][milestone_pair][sim_idx]
         
         # Get speedup values, handling SC speedup samples
-        if isinstance(samples["speeds"][milestone], np.ndarray):
-            start_speed = samples["speeds"][milestone][sim_idx]
+        if isinstance(milestone_samples["speeds"][milestone], np.ndarray):
+            start_speed = milestone_samples["speeds"][milestone][sim_idx]
         else:
-            start_speed = samples["speeds"][milestone]
+            start_speed = milestone_samples["speeds"][milestone]
             
-        if isinstance(samples["speeds"][next_milestone], np.ndarray):
-            end_speed = samples["speeds"][next_milestone][sim_idx]
+        if isinstance(milestone_samples["speeds"][next_milestone], np.ndarray):
+            end_speed = milestone_samples["speeds"][next_milestone][sim_idx]
         else:
-            end_speed = samples["speeds"][next_milestone]
+            end_speed = milestone_samples["speeds"][next_milestone]
         
         # Run simulation for this phase with exponential speedup
-        calendar_days = run_phase_simulation(gap, start_speed, end_speed, progress_rate, milestone_pair)
+        calendar_days = run_phase_simulation(gap, start_speed, end_speed, progress_rate_schedule_params, current_date, milestone_pair)
         phase_calendar_days.append(calendar_days)
         
         try:
-            current_date = current_date + pd.Timedelta(days=calendar_days)
+            current_date = current_date + timedelta(days=calendar_days)
             if current_date.year > 9999:
                 current_date = datetime(9999, 12, 31)
-        except (OverflowError, pd.errors.OutOfBoundsTimedelta):
+        except OverflowError:
             current_date = datetime(9999, 12, 31)
         
         milestone_dates.append(current_date)
@@ -481,16 +495,16 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_ra
     
     return milestone_dates, phase_calendar_days
 
-def run_single_simulation(samples: dict, sim_idx: int, progress_rate: float = 1.0) -> list[datetime]:
+# def run_single_simulation(samples: dict, sim_idx: int, progress_rate: float = 1.0) -> list[datetime]:
     """Run a single simulation and return milestone dates."""
     milestone_dates, _ = run_single_simulation_with_tracking(samples, sim_idx, progress_rate)
     return milestone_dates
 
-def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, project_progress_samples: dict, project_samples: dict = None) -> tuple[dict, list[datetime], dict]:
+def run_multi_project_simulation_with_tracking(milestone_samples: dict, sim_idx: int, project_progress_samples: dict, project_samples: dict = None) -> tuple[dict, list[datetime], dict]:
     """Run multi-project simulation with detailed tracking.
     
     Args:
-        samples: Milestone timing samples
+        milestone_samples: Milestone timing samples
         sim_idx: Simulation index
         project_progress_samples: Dictionary mapping project names to arrays of software progress rate samples
         project_samples: Full project samples with remaining years and initial speedups (optional)
@@ -503,8 +517,10 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
     
     # Run simulation for each project with tracking
     for project_name, progress_rate_samples in project_progress_samples.items():
-        progress_rate = progress_rate_samples[sim_idx]  # Get rate for this simulation
-        
+        progress_rate_schedule_params = project_samples[project_name]["schedule_params"]
+        progress_rate_schedule_params["initial_sw_progress_rate"] = progress_rate_samples[sim_idx]  # Get initial rate for this simulation
+        # TODO: Add other project-specific parameters to the schedule params
+
         # Get remaining years and initial speedup if available
         remaining_years_to_sc = None
         initial_speedup = None
@@ -514,7 +530,7 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
         
         # Run simulation with the project-specific parameters
         milestone_dates, phase_durations = run_single_simulation_with_tracking(
-            samples, sim_idx, progress_rate,
+            milestone_samples, sim_idx, progress_rate_schedule_params,
             remaining_years_to_sc=remaining_years_to_sc,
             initial_speedup=initial_speedup
         )
@@ -555,12 +571,12 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     print("Loading research trajectory data...")
     trajectory_data = load_research_trajectory_data("research_trajectory_data.json")
     
-    # Generate samples (shared across all projects), including the new speedup distributions
+    # Generate milestone samples (shared across all projects), including the new speedup distributions
     print("\nGenerating milestone samples...")
-    samples = get_milestone_samples(config, config["simulation"]["n_sims"])
+    milestone_samples = get_milestone_samples(config, config["simulation"]["n_sims"])
 
     print("\nGenerating project samples with correlations...")
-    project_samples = get_project_samples_with_correlations(config, config["simulation"]["n_sims"], trajectory_data, samples["speeds"]["SC"])
+    project_samples = get_project_samples_with_correlations(config, config["simulation"]["n_sims"], trajectory_data, milestone_samples["speeds"]["SC"])
     
     # Derive project progress samples from the full project_samples for compatibility
     print("\nDeriving project progress rate samples...")
@@ -568,11 +584,11 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     
     # Print statistics for project parameters
     print("Project configurations:")
-    for project_name, samples_data in project_samples.items():
-        progress_rates = samples_data["software_progress_rate"]
-        hardware_multiples = samples_data["initial_hardware_multiple"] 
-        months_behind = samples_data["initial_software_months_behind"]
-        remaining_years = samples_data["remaining_human_only_years"]
+    for project_name, sample_data in project_samples.items():
+        progress_rates = sample_data["software_progress_rate"]
+        hardware_multiples = sample_data["initial_hardware_multiple"] 
+        months_behind = sample_data["initial_software_months_behind"]
+        remaining_years = sample_data["remaining_human_only_years"]
         
         print(f"  {project_name}:")
         print(f"    Progress rates: 10th={np.percentile(progress_rates, 10):.2f}x, 50th={np.percentile(progress_rates, 50):.2f}x, 90th={np.percentile(progress_rates, 90):.2f}x")
@@ -591,7 +607,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     
     for i in tqdm(range(config["simulation"]["n_sims"]), desc="Simulations"):
         project_results, first_milestone_dates, project_phase_durations = run_multi_project_simulation_with_tracking(
-            samples, i, project_progress_samples, project_samples
+            milestone_samples, i, project_progress_samples, project_samples
         )
         all_first_milestone_dates.append(first_milestone_dates)
         all_project_results.append(project_results)
@@ -668,7 +684,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
                             print(f"      SC to SAR time: {sc_to_sar_days/365:.3f} years")
                 
                 # Also show the SC to SAR gap sample for this simulation
-                sc_to_sar_gap_years = samples["time_gaps"]["SC to SAR"][sim_idx] / 365
+                sc_to_sar_gap_years = milestone_samples["time_gaps"]["SC to SAR"][sim_idx] / 365
                 print(f"    SC to SAR gap sample for this simulation: {sc_to_sar_gap_years:.3f} years")
         
         if winner:
@@ -770,7 +786,7 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
     
     # Plot distribution for each milestone
     for i, milestone in enumerate(milestones):
-        MAX_GRAPH_YEAR = 2032
+        MAX_GRAPH_YEAR = 2100
         start_year = float(config["starting_time"].split()[-1])
 
         # Use the correct index to get the right milestone data
@@ -786,6 +802,8 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
             year_int = int(year)
             if year_int > 9999:
                 return f"{year_int}"
+            if year_int > 2100:
+                return ">2100"
             month = int((year - year_int) * 12) + 1
             month_name = datetime(year_int, month, 1).strftime('%b')
             return f"{month_name} {year_int}"
@@ -1922,8 +1940,27 @@ def create_project_sar_timeline_plot(all_project_results: list[dict], config: di
 
     return fig
 
-# Add helper to compute reliability based on failure model parameters
+def sw_progress_rate_schedule(t: datetime, schedule_params: dict | None = None) -> float:
+    """Return the software progress rate at time t_days.
+    
+    schedule_params is a dictionary with the following keys:
+        type: "constant" or "decay"
+        eta_days: float
+    
+    If schedule_params is None or "type" is "constant", this returns the initial_sw_progress_rate.
+    If "type" is "decay", this returns the initial_sw_progress_rate * np.exp(-t_days / eta_days).
+    """
+    initial_rate = schedule_params["initial_sw_progress_rate"]
+    if schedule_params["type"] == "constant":
+        return initial_rate
+    elif schedule_params["type"] == "decay":
+        if "eta_days" not in schedule_params:
+            raise ValueError("eta_days is required for decay schedule")
+        return initial_rate * np.exp(-(t - schedule_params["start_date"]).days / schedule_params["eta_days"])
+    else:
+        raise ValueError(f"Unsupported schedule type: {schedule_params['type']}")
 
+# Add helper to compute reliability based on failure model parameters
 def compute_reliability(t_days: float, model_params: dict | None) -> float:
     """Return the reliability R(t) (fraction of GPUs still working) after t_days.
 
