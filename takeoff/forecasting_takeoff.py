@@ -766,7 +766,17 @@ def setup_plotting_style(plotting_style: dict):
         'small': font_regular_xsmall
     }
 
-def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+def _year_to_date_str(year: float) -> str:
+    """Convert a decimal year to a 'Month YYYY' string or '>2100'."""
+    if year > 2100:
+        return ">2100"
+    year_int = int(year)
+    month = int((year - year_int) * 12) + 1
+    month = min(month, 12)  # Prevent month > 12 due to float precision
+    month_name = datetime(year_int, month, 1).strftime('%b')
+    return f"{month_name} {year_int}"
+
+def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], config: dict, plotting_style: dict, fonts: dict, title: str | None = None) -> plt.Figure:
     """Create timeline plot showing milestone achievement distributions."""
     # Get background color
     background_color = "#FFFEF8"
@@ -796,17 +806,6 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
         p10 = np.percentile(milestone_data, 10)
         p50 = np.percentile(milestone_data, 50)
         p90 = np.percentile(milestone_data, 90)
-        
-        # Convert decimal years to month and year format for display
-        def year_to_date(year):
-            year_int = int(year)
-            if year_int > 9999:
-                return f"{year_int}"
-            if year_int > 2100:
-                return ">2100"
-            month = int((year - year_int) * 12) + 1
-            month_name = datetime(year_int, month, 1).strftime('%b')
-            return f"{month_name} {year_int}"
         
         # Filter data to visible range for KDE
         visible_data = [x for x in milestone_data if start_year <= x <= MAX_GRAPH_YEAR]
@@ -872,20 +871,12 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
                          alpha=0.8, label=f"{milestone} (Consistent)", zorder=2)
         
         # Add statistics text using full data with month and year format
-        if (p90 > 2100): 
-            stats = (
-                f"{milestone}: {milestone_full[i]}\n"
-                f"  10th: {year_to_date(p10)}\n"
-                f"  50th: {year_to_date(p50)}\n"
-                f"  90th: >2100"
-            )
-        else: 
-            stats = (
-                f"{milestone}: {milestone_full[i]}\n"
-                f"  10th: {year_to_date(p10)}\n"
-                f"  50th: {year_to_date(p50)}\n"
-                f"  90th: {year_to_date(p90)}"
-            )
+        stats = (
+            f"{milestone}: {milestone_full[i]}\n"
+            f"  10th: {_year_to_date_str(p10)}\n"
+            f"  50th: {_year_to_date_str(p50)}\n"
+            f"  90th: {_year_to_date_str(p90)}"
+        )
         
         if i == 0:
             stats_text = stats
@@ -897,17 +888,15 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
             transform=ax.transAxes,
             verticalalignment='top',
             horizontalalignment='left',
-            # bbox=dict(facecolor='white', alpha=0.9,
-            #          edgecolor='black',
-            #          linewidth=0.5),
             fontsize=plotting_style["font"]["sizes"]["small"])
     text.set_fontproperties(fonts['regular_legend'])
     
     # Configure plot styling
-    title = ax.set_title("AI Takeoff Forecast, Assuming Superhuman Coder in Mar 2027",
+    plot_title = title if title else "AI Takeoff Forecast, Assuming Superhuman Coder in Mar 2027"
+    title_obj = ax.set_title(plot_title,
                  fontsize=plotting_style["font"]["sizes"]["title"],
                  pad=10)
-    title.set_fontproperties(fonts['regular'])
+    title_obj.set_fontproperties(fonts['regular'])
     
     xlabel = ax.set_xlabel("Year",
                  fontsize=plotting_style["font"]["sizes"]["axis_labels"])
@@ -938,7 +927,7 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
 
     return fig
 
-def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config: dict, plotting_style: dict, fonts: dict, title: str | None = None) -> plt.Figure:
     """Create box plot showing the distribution of time spent in each phase."""
     # Get background color
     background_color = "#FFFEF8"
@@ -1016,9 +1005,9 @@ def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config
     ax_box.yaxis.grid(True, linestyle='--', alpha=0.7)
     
     # Set labels and title
+    plot_title = title if title else "Time Spent in Each Milestone Transition, assuming fixed training compute"
     ax_box.set_ylabel("Calendar Years (log scale)", fontproperties=fonts["regular_small"])
-    ax_box.set_title("Time Spent in Each Milestone Transition, assuming fixed training compute", 
-                     fontproperties=fonts["regular"], loc='left')
+    ax_box.set_title(plot_title, fontproperties=fonts["regular"], loc='left')
     
     # Create statistics table in the right subplot
     ax_stats.axis('off')  # Hide axes for the stats panel
@@ -1739,20 +1728,12 @@ def create_project_sc_timeline_plot(all_project_results: list[dict], config: dic
                         ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
                 
                 # Add to stats text
-                if (p90 > 2100):
-                    stats = (
-                        f"{project_name}:\n"
-                        f"  10th: {year_to_date(p10)}\n"
-                        f"  50th: {year_to_date(p50)}\n"
-                        f"  90th: >2100"
-                    )
-                else:
-                    stats = (
-                        f"{project_name}:\n"
-                        f"  10th: {year_to_date(p10)}\n"
-                        f"  50th: {year_to_date(p50)}\n"
-                        f"  90th: {year_to_date(p90)}"
-                    )
+                stats = (
+                    f"{project_name}:\n"
+                    f"  10th: {year_to_date(p10)}\n"
+                    f"  50th: {year_to_date(p50)}\n"
+                    f"  90th: {year_to_date(p90)}"
+                )
                 
                 if proj_idx == 0:
                     stats_text = stats
