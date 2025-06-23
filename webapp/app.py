@@ -20,7 +20,7 @@ from takeoff import forecasting_takeoff
 
 st.set_page_config(layout="wide")
 
-st.title("🤖 AI Takeoff Model")
+st.title("AI Takeoff Model")
 
 @st.cache_data
 def load_default_config():
