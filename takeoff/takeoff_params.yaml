@@ -30,7 +30,7 @@ speedups:
 # NOTE: the timelines forecast does not use uncertainty over SC, so 
 # the "present_day_to_sc_info" section may be incongrous with a given sample. Fix later.
 speedup_distributions:
-  SC: [3.7, 9]        # Absolute speedup for Superhuman Coder
+  SC: [3.89, 8.97]        # Absolute speedup for Superhuman Coder
   SAR_ratio: [3, 7]   # Ratio of SAR speedup to SC speedup
   SIAR_ratio: [8, 15] # Ratio of SIAR speedup to SAR speedup
   ASI_ratio: [4, 10]  # Ratio of ASI speedup to SIAR speedup

@@ -356,7 +356,7 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # adjust algorithmic rate if human alg progress has decreased, in between
             if time >= human_alg_progress_decrease_date:
@@ -498,7 +498,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             trajectory.insert(0, (time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # Update progress and time
             progress -= dt * v_algorithmic
