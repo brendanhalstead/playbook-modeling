@@ -12,7 +12,7 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def load_external_data(csv_path: str = "../../external/headline.csv") -> pd.DataFrame:
+def load_external_data(csv_path: str = "../external/headline.csv") -> pd.DataFrame:
     """Load external benchmark data points for overlay on plots."""
     if not Path(csv_path).exists():
         print(f"Warning: External data file {csv_path} not found")
@@ -1195,7 +1195,7 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
     # Overlay illustrative SE trend if requested
     # ---------------------------------------------------------------------
     if overlay_illustrative_trend:
-        trend_path = Path("../../external/illustrative_se_trend_converted.csv")
+        trend_path = Path("../external/illustrative_se_trend_converted.csv")
         if trend_path.exists():
             try:
                 trend_df = pd.read_csv(trend_path)
