@@ -6,7 +6,8 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
-from simple_forecasting_timelines_plotting import *
+from simple_forecasting_timelines_plotting_munged import *
+from collections import OrderedDict  # NEW IMPORT FOR TOPOLOGICAL SORT
 
 def load_config(config_path: str) -> dict:
     """Load configuration from YAML file."""
@@ -127,6 +128,9 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     # Add growth/decay parameters
     samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
+
+    # Patch R&D speedup
+    samples["patch_rd_speedup"] = np.full(n_sims, config["distributions"]["patch_rd_speedup"])
     
     return samples
 
@@ -356,7 +360,10 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"][i]:
+                v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            else:
+                v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # adjust algorithmic rate if human alg progress has decreased, in between
             if time >= human_alg_progress_decrease_date:
@@ -498,7 +505,10 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             trajectory.insert(0, (time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"][i]:
+                v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            else:
+                v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # Update progress and time
             progress -= dt * v_algorithmic
@@ -523,7 +533,10 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     """Run simplified SC simulation and plot results."""
     print("Loading configuration...")
     config = load_config(config_path)
-    
+
+    # Apply parent-child inheritance (with topological sort)
+    config["forecasters"] = apply_inheritance_to_forecasters(config["forecasters"])
+
     # Get current date as decimal year
     # current_date = datetime.now()
     # current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
@@ -572,52 +585,253 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             
             pbar.update(1)
     
-    print("\nGenerating plots...")
-    # Create and save original plot
-    fig = plot_results(all_forecaster_results, config)
-    
-    # Create and save trajectory plot
-    fig_trajectories = plot_march_2027_trajectories(all_forecaster_results, all_forecaster_trajectories, all_forecaster_samples, config)
-    
-    # Create and save backcasted trajectory plots - both versions
-    fig_backcasted_colored = plot_backcasted_trajectories(all_forecaster_backcast_trajectories, all_forecaster_samples, config, color_by_growth_type=True)
-    fig_backcasted_red = plot_backcasted_trajectories(all_forecaster_backcast_trajectories, all_forecaster_samples, config, color_by_growth_type=False)
-    
-    # Create and save combined trajectory plots
-    fig_combined_colored = plot_combined_trajectories(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, config, color_by_growth_type=True)
-    fig_combined_red = plot_combined_trajectories(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, config, color_by_growth_type=False)
-    
-    # Create and save combined trajectories for March 2027 SC arrivals only
-    fig_combined_march_2027 = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True)
-    fig_combined_march_2027_median = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, plot_median_curve=True)
-    fig_combined_march_2027_illustrative = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, overlay_illustrative_trend=True)
-
     # Create output directory if it doesn't exist
     output_dir = Path("figures")
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print("\nSaving plots...")
-    # Save plots
+    print("\nGenerating plots...")
+    # Create and save original plot
+    fig = plot_results(all_forecaster_results, config)
     fig.savefig(output_dir / "simple_combined_headline.png", dpi=300, bbox_inches="tight")
-    fig_trajectories.savefig(output_dir / "march_2027_trajectories.png", dpi=300, bbox_inches="tight")
-    fig_backcasted_colored.savefig(output_dir / "backcasted_trajectories.png", dpi=300, bbox_inches="tight")
-    fig_backcasted_red.savefig(output_dir / "backcasted_trajectories_red.png", dpi=300, bbox_inches="tight")
-    fig_combined_colored.savefig(output_dir / "combined_trajectories.png", dpi=300, bbox_inches="tight")
-    fig_combined_red.savefig(output_dir / "combined_trajectories_red.png", dpi=300, bbox_inches="tight")
-    fig_combined_march_2027.savefig(output_dir / "combined_trajectories_march_2027.png", dpi=300, bbox_inches="tight")
-    fig_combined_march_2027_median.savefig(output_dir / "combined_trajectories_march_2027_median.png", dpi=300, bbox_inches="tight")
-    fig_combined_march_2027_illustrative.savefig(output_dir / "combined_trajectories_march_2027_illustrative.png", dpi=300, bbox_inches="tight")
-    
-    # Close figures to free memory
+
     plt.close(fig)
-    plt.close(fig_trajectories)
-    plt.close(fig_backcasted_colored)
-    plt.close(fig_backcasted_red)
-    plt.close(fig_combined_colored)
-    plt.close(fig_combined_red)
-    plt.close(fig_combined_march_2027)
-    
+    for forecaster_name in all_forecaster_results.keys():
+        # --- Figures that are independent of a specific SC month ---
+        fig_backcasted_colored = plot_backcasted_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=True,
+            forecaster_filter=[forecaster_name],
+        )
+
+        fig_backcasted_red = plot_backcasted_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=False,
+            forecaster_filter=[forecaster_name],
+        )
+
+        fig_combined_colored = plot_combined_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=True,
+            forecaster_filter=[forecaster_name],
+        )
+
+        fig_combined_red = plot_combined_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=False,
+            forecaster_filter=[forecaster_name],
+        )
+
+        # Save and close the month-independent figures
+        fig_backcasted_colored.savefig(
+            output_dir / f"backcasted_trajectories_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig_backcasted_red.savefig(
+            output_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig_combined_colored.savefig(
+            output_dir / f"combined_trajectories_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig_combined_red.savefig(
+            output_dir / f"combined_trajectories_red_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+        plt.close(fig_backcasted_colored)
+        plt.close(fig_backcasted_red)
+        plt.close(fig_combined_colored)
+        plt.close(fig_combined_red)
+
+        # --- Figures filtered by specific SC arrival months ---
+        target_months = [
+            # March targets
+            "March 2027",
+            "March 2028",
+            "March 2029",
+            "March 2030",
+            # September targets
+            "September 2027",
+            "September 2028",
+            "September 2029",
+            "September 2030",
+        ]
+
+        # Collect central trajectories per month for later comparison
+        central_trajs_by_month: dict[str, dict] = {}
+
+        for sc_month_str in target_months:
+            month_slug = sc_month_str.lower().replace(" ", "_")  # e.g. "march_2028"
+
+            # Trajectory plot filtered by SC month
+            fig_trajectories = plot_trajectories_sc_month(
+                all_forecaster_results,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                config,
+                sc_month_str=sc_month_str,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # Combined trajectory plots filtered by SC month
+            fig_combined_month, central_path = plot_combined_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # Store central trajectory if available
+            if central_path is not None:
+                central_trajs_by_month[sc_month_str] = central_path
+
+            fig_combined_month_median, _ = plot_combined_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                plot_median_curve=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            fig_combined_month_illustrative, _ = plot_combined_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                overlay_illustrative_trend=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # --- Save the month-specific figures ---
+            fig_trajectories.savefig(
+                output_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_combined_month.savefig(
+                output_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_combined_month_median.savefig(
+                output_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_combined_month_illustrative.savefig(
+                output_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+
+            # Close month-specific figures to free memory
+            plt.close(fig_trajectories)
+            plt.close(fig_combined_month)
+            plt.close(fig_combined_month_median)
+            plt.close(fig_combined_month_illustrative)
+
+        print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
+
+        # --------------------------------------------------------
+        # Plot comparison of central trajectories across months
+        # --------------------------------------------------------
+        if central_trajs_by_month:
+            central_list = sorted(central_trajs_by_month.items())  # list[(label, traj)]
+            fig_cent_compare = plot_central_trajectories_comparison(
+                central_list,
+                config,
+                overlay_external_data=True,
+            )
+
+            fig_cent_compare.savefig(
+                output_dir / f"central_trajectories_comparison_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+
+            plt.close(fig_cent_compare)
+
     return fig, all_forecaster_results
+
+# NEW TOP-LEVEL FUNCTIONS FOR FORECASTER INHERITANCE
+
+def _toposort_forecasters(forecasters: dict) -> list:
+    """Return forecaster names sorted so that parents come before children.
+
+    Raises:
+        ValueError: if a cycle is detected or if a referenced parent is missing.
+    """
+    visited = {}
+    order: list[str] = []
+
+    def dfs(name: str):
+        if name in visited:
+            if visited[name] == "temp":
+                raise ValueError(
+                    f"Circular parent relationship detected involving '{name}'."
+                )
+            return
+        visited[name] = "temp"
+        parent_name = forecasters.get(name, {}).get("parent")
+        if parent_name:
+            if parent_name not in forecasters:
+                raise ValueError(
+                    f"Parent forecaster '{parent_name}' (referenced by '{name}') not found."
+                )
+            dfs(parent_name)
+        visited[name] = "perm"
+        order.append(name)
+
+    for fname in forecasters:
+        dfs(fname)
+    return order
+
+
+def apply_inheritance_to_forecasters(forecasters: dict) -> OrderedDict:
+    """Resolve parent-based inheritance and return an OrderedDict in topological order."""
+    sorted_names = _toposort_forecasters(forecasters)
+    for name in sorted_names:
+        cfg = forecasters[name]
+        parent_name = cfg.get("parent")
+        if parent_name:
+            parent_cfg = forecasters[parent_name]
+            parent_dist = parent_cfg.get("distributions", {})
+            child_dist = cfg.setdefault("distributions", {})
+            for param, value in parent_dist.items():
+                if param not in child_dist:
+                    child_dist[param] = value
+                else:
+                    print(
+                        f"Applying change to {param} for {name} (overrides {parent_cfg.get('name', parent_name)})"
+                    )
+    return OrderedDict((n, forecasters[n]) for n in sorted_names)
+
 
 if __name__ == "__main__":
     # Run with closed-form solution (faster)

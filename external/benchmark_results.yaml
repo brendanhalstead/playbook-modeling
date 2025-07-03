@@ -1,0 +1,274 @@
+benchmark_name: METR-Horizon-v1
+long_tasks_version: 2ce7f1e0c4f8b7f2653e7014941a1a9f3ca908e2
+swaa_version: 3d2ab4f0662a752409858a73e006af35e3fb7d64
+results:
+  gpt_3_5_turbo_instruct:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 0.612399
+          ci_low: 0.238752
+          ci_high: 1.046786
+        p80_horizon_length:
+          estimate: 0.174789
+          ci_low: 0.049932
+          ci_high: 0.300984
+        average_score:
+          estimate: 0.218461
+        is_sota: true
+    release_date: 2022-03-15
+  claude_3_opus:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 6.76831
+          ci_low: 3.061897
+          ci_high: 13.188829
+        p80_horizon_length:
+          estimate: 1.202246
+          ci_low: 0.452619
+          ci_high: 3.003725
+        average_score:
+          estimate: 0.38058
+        is_sota: false
+    release_date: 2024-03-04
+  gpt_4o:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 9.026638
+          ci_low: 4.570256
+          ci_high: 18.160638
+        p80_horizon_length:
+          estimate: 1.658568
+          ci_low: 0.694841
+          ci_high: 3.749884
+        average_score:
+          estimate: 0.404949
+        is_sota: true
+    release_date: 2024-05-13
+  claude_4_opus:
+    agents:
+      flock-public:
+        p50_horizon_length:
+          estimate: 79.118054
+          ci_low: 41.952936
+          ci_high: 133.970983
+        p80_horizon_length:
+          estimate: 19.921962
+          ci_low: 7.433889
+          ci_high: 41.683779
+        average_score:
+          estimate: 0.634833
+        is_sota: false
+    release_date: 2025-05-14
+  gpt_4:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 5.623119
+          ci_low: 2.78383
+          ci_high: 10.603753
+        p80_horizon_length:
+          estimate: 1.021607
+          ci_low: 0.397602
+          ci_high: 2.383854
+        average_score:
+          estimate: 0.363986
+        is_sota: true
+    release_date: 2023-03-14
+  o4-mini:
+    agents:
+      flock-secret:
+        p50_horizon_length:
+          estimate: 76.509015
+          ci_low: 35.213047
+          ci_high: 151.478027
+        p80_horizon_length:
+          estimate: 14.596343
+          ci_low: 5.037342
+          ci_high: 35.34468
+        average_score:
+          estimate: 0.634753
+        is_sota: false
+    release_date: 2025-04-16
+  gpt_4_1106:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 8.078413
+          ci_low: 3.880551
+          ci_high: 15.357948
+        p80_horizon_length:
+          estimate: 1.351942
+          ci_low: 0.554921
+          ci_high: 3.170199
+        average_score:
+          estimate: 0.39851
+        is_sota: true
+    release_date: 2023-11-06
+  gpt_4_0125:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 5.391592
+          ci_low: 2.736661
+          ci_high: 9.899686
+        p80_horizon_length:
+          estimate: 1.207143
+          ci_low: 0.521927
+          ci_high: 2.4916
+        average_score:
+          estimate: 0.351438
+        is_sota: false
+    release_date: 2024-01-25
+  o1_preview:
+    agents:
+      duet:
+        p50_horizon_length:
+          estimate: 21.766438
+          ci_low: 11.111586
+          ci_high: 38.057727
+        p80_horizon_length:
+          estimate: 4.467843
+          ci_low: 1.879312
+          ci_high: 9.484729
+        average_score:
+          estimate: 0.489926
+        is_sota: true
+    release_date: 2024-09-12
+  o1_elicited:
+    agents:
+      flock:
+        p50_horizon_length:
+          estimate: 38.007645
+          ci_low: 16.351913
+          ci_high: 74.319482
+        p80_horizon_length:
+          estimate: 5.64267
+          ci_low: 1.847865
+          ci_high: 14.904923
+        average_score:
+          estimate: 0.553872
+        is_sota: true
+    release_date: 2024-12-05
+  claude_4_sonnet:
+    agents:
+      flock-public:
+        p50_horizon_length:
+          estimate: 66.915014
+          ci_low: 33.520373
+          ci_high: 115.817668
+        p80_horizon_length:
+          estimate: 16.278292
+          ci_low: 6.153586
+          ci_high: 33.995202
+        average_score:
+          estimate: 0.615023
+        is_sota: false
+    release_date: 2025-05-14
+  o3:
+    agents:
+      flock-secret:
+        p50_horizon_length:
+          estimate: 91.271355
+          ci_low: 45.62758
+          ci_high: 163.132889
+        p80_horizon_length:
+          estimate: 19.947497
+          ci_low: 6.752332
+          ci_high: 43.779201
+        average_score:
+          estimate: 0.650103
+        is_sota: true
+    release_date: 2025-04-16
+  gpt2:
+    agents:
+      "null":
+        p50_horizon_length:
+          estimate: 0.039792
+          ci_low: 0.001451
+          ci_high: 0.121631
+        p80_horizon_length:
+          estimate: 0.005662
+          ci_low: 8.6e-05
+          ci_high: 0.02532
+        average_score:
+          estimate: 0.101641
+        is_sota: true
+    release_date: 2019-02-14
+  gpt_4_turbo:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 6.777382
+          ci_low: 3.34509
+          ci_high: 11.860324
+        p80_horizon_length:
+          estimate: 1.586608
+          ci_low: 0.741468
+          ci_high: 3.109535
+        average_score:
+          estimate: 0.368808
+        is_sota: false
+    release_date: 2024-04-09
+  claude_3_5_sonnet_20241022:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 30.838879
+          ci_low: 14.176289
+          ci_high: 62.812094
+        p80_horizon_length:
+          estimate: 5.193325
+          ci_low: 1.982862
+          ci_high: 12.83119
+        average_score:
+          estimate: 0.530434
+        is_sota: true
+    release_date: 2024-10-22
+  davinci_002:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 0.14886
+          ci_low: 0.063771
+          ci_high: 0.244929
+        p80_horizon_length:
+          estimate: 0.034187
+          ci_low: 0.011998
+          ci_high: 0.062384
+        average_score:
+          estimate: 0.162822
+        is_sota: true
+    release_date: 2020-05-28
+  claude_3_7_sonnet:
+    agents:
+      flock-public:
+        p50_horizon_length:
+          estimate: 53.570632
+          ci_low: 27.270717
+          ci_high: 87.421899
+        p80_horizon_length:
+          estimate: 14.825664
+          ci_low: 5.751363
+          ci_high: 30.566576
+        average_score:
+          estimate: 0.594671
+        is_sota: true
+    release_date: 2025-02-24
+  claude_3_5_sonnet:
+    agents:
+      modular-public:
+        p50_horizon_length:
+          estimate: 18.613492
+          ci_low: 9.455775
+          ci_high: 34.022754
+        p80_horizon_length:
+          estimate: 3.31654
+          ci_low: 1.326958
+          ci_high: 7.421772
+        average_score:
+          estimate: 0.47651
+        is_sota: true
+    release_date: 2024-06-20

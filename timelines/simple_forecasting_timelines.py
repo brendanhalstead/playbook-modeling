@@ -591,6 +591,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     fig_combined_march_2027 = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True)
     fig_combined_march_2027_median = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, plot_median_curve=True)
     fig_combined_march_2027_illustrative = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, overlay_illustrative_trend=True)
+    fig_combined_march_2027_agents = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, add_agent_checkpoints=True)
 
     # Create output directory if it doesn't exist
     output_dir = Path("figures")
@@ -607,6 +608,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     fig_combined_march_2027.savefig(output_dir / "combined_trajectories_march_2027.png", dpi=300, bbox_inches="tight")
     fig_combined_march_2027_median.savefig(output_dir / "combined_trajectories_march_2027_median.png", dpi=300, bbox_inches="tight")
     fig_combined_march_2027_illustrative.savefig(output_dir / "combined_trajectories_march_2027_illustrative.png", dpi=300, bbox_inches="tight")
+    fig_combined_march_2027_agents.savefig(output_dir / "combined_trajectories_march_2027_agents.png", dpi=300, bbox_inches="tight")
     
     # Close figures to free memory
     plt.close(fig)
@@ -616,6 +618,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     plt.close(fig_combined_colored)
     plt.close(fig_combined_red)
     plt.close(fig_combined_march_2027)
+    plt.close(fig_combined_march_2027_median)
+    plt.close(fig_combined_march_2027_illustrative)
+    plt.close(fig_combined_march_2027_agents)
     
     return fig, all_forecaster_results
 

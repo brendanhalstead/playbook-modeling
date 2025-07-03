@@ -12,7 +12,7 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def load_external_data(csv_path: str = "../../external/headline.csv") -> pd.DataFrame:
+def load_external_data(csv_path: str = "../external/headline.csv") -> pd.DataFrame:
     """Load external benchmark data points for overlay on plots."""
     if not Path(csv_path).exists():
         print(f"Warning: External data file {csv_path} not found")
@@ -41,6 +41,28 @@ def format_year_month(year_decimal: float) -> str:
     month_name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month-1]
     return f"{month_name} {year}"
+
+def save_trajectory_to_csv(trajectory: list, output_path: str, columns=['year_decimal', 'horizon_minutes']):
+    """
+    Saves a single trajectory to a CSV file.
+
+    Args:
+        trajectory (list): A list of tuples or lists representing rows.
+        output_path (str): The path to the output CSV file.
+        columns (list): The column headers for the CSV file.
+    """
+    if not trajectory:
+        print("Warning: Empty trajectory, not saving.")
+        return
+
+    df = pd.DataFrame(trajectory, columns=columns)
+    
+    # Create directory if it doesn't exist
+    output_dir = Path(output_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    df.to_csv(output_path, index=False)
+    print(f"Trajectory saved to {output_path}")
 
 def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     """Create plot showing results from all forecasters."""
@@ -503,6 +525,17 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
                           color='black', s=50, alpha=0.8, zorder=15, marker='o',
                           label='External Benchmarks (p80)')
                 print(f"Overlaid {len(visible_data)} external benchmark points")
+                
+                # Save the METR data to a CSV file
+                if 'agent' in visible_data.columns:
+                    metr_data_to_save = visible_data[['release_year_decimal', 'p80', 'agent']].values.tolist()
+                    save_trajectory_to_csv(
+                        metr_data_to_save,
+                        "figures/metr_p80_benchmarks.csv",
+                        columns=['year_decimal', 'horizon_minutes', 'agent']
+                    )
+                else:
+                    print("Warning: 'agent' column not found in external data, not saving METR benchmarks.")
     
     # Configure plot
     ax.set_title("Backcasted Time Horizon Trajectories\n(Historical development leading to current capabilities)",
@@ -735,6 +768,17 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
                           color='black', s=50, alpha=0.8, zorder=15, marker='o',
                           label='External Benchmarks (p80)')
                 print(f"Overlaid {len(visible_data)} external benchmark points")
+                
+                # Save the METR data to a CSV file
+                if 'model' in visible_data.columns:
+                    metr_data_to_save = visible_data[['release_year_decimal', 'p80', 'model']].values.tolist()
+                    save_trajectory_to_csv(
+                        metr_data_to_save,
+                        "figures/metr_p80_benchmarks.csv",
+                        columns=['year_decimal', 'horizon_minutes', 'model']
+                    )
+                else:
+                    print("Warning: 'model' column not found in external data, not saving METR benchmarks.")
     
     # Configure plot
     ax.set_title("Complete Time Horizon Trajectories\n(Historical development and future projections)",
@@ -841,7 +885,6 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
                            markersize=8, label='External Benchmarks (p80)', linestyle='None')
                 )
     
-
     legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=1.0)
     legend.set_zorder(50)
     
@@ -1000,6 +1043,17 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
                           color='black', s=50, alpha=0.8, zorder=15, marker='o',
                           label='External Benchmarks (p80)')
                 print(f"Overlaid {len(visible_data)} external benchmark points")
+                
+                # Save the METR data to a CSV file
+                if 'model' in visible_data.columns:
+                    metr_data_to_save = visible_data[['release_year_decimal', 'p80', 'model']].values.tolist()
+                    save_trajectory_to_csv(
+                        metr_data_to_save,
+                        "figures/metr_p80_benchmarks.csv",
+                        columns=['year_decimal', 'horizon_minutes', 'model']
+                    )
+                else:
+                    print("Warning: 'model' column not found in external data, not saving METR benchmarks.")
     
     # Configure plot
     ax.set_title("Complete Time Horizon Trajectories - March 2027 SC Arrivals\n(Historical development and future projections)",
@@ -1168,6 +1222,11 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
             best_idx = int(np.nanargmin(np.where(valid_mask, distances, np.inf)))
             best_path = all_combined_paths[best_idx]
             ax.plot(best_path['times'], best_path['horizons'], color='green', linewidth=2,linestyle='--', label='Central Trajectory', zorder=48)
+            
+            # Save the central trajectory to a CSV file
+            central_trajectory_data = list(zip(best_path['times'], best_path['horizons']))
+            output_path = "figures/central_march_2027_trajectory.csv"
+            save_trajectory_to_csv(central_trajectory_data, output_path)
     
 
 
@@ -1183,6 +1242,9 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
 
         t_arr = best_path['times']
         h_arr = best_path['horizons']
+        
+        checkpoints_to_save = []
+        
         for t_point, label in checkpoints:
             if t_point < t_arr[0] or t_point > t_arr[-1]:
                 continue  # outside trajectory range
@@ -1190,12 +1252,20 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
             ax.scatter(t_point, h_point, color='green', s=40, zorder=49)
             ax.annotate(label, (t_point, h_point), textcoords="offset points",
                         xytext=(5, -5), ha='left', fontsize=config["plotting_style"]["font"]["sizes"]["ticks"], color='black')
+            checkpoints_to_save.append([t_point, h_point, label])
+        
+        if checkpoints_to_save:
+            save_trajectory_to_csv(
+                checkpoints_to_save,
+                "figures/agent_checkpoints.csv",
+                columns=['year_decimal', 'horizon_minutes', 'label']
+            )
         
     # ---------------------------------------------------------------------
     # Overlay illustrative SE trend if requested
     # ---------------------------------------------------------------------
     if overlay_illustrative_trend:
-        trend_path = Path("../../external/illustrative_se_trend_converted.csv")
+        trend_path = Path("../external/illustrative_se_trend_converted.csv")
         if trend_path.exists():
             try:
                 trend_df = pd.read_csv(trend_path)

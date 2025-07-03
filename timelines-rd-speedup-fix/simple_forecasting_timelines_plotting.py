@@ -12,23 +12,50 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def load_external_data(csv_path: str = "../external/headline.csv") -> pd.DataFrame:
-    """Load external benchmark data points for overlay on plots."""
-    if not Path(csv_path).exists():
-        print(f"Warning: External data file {csv_path} not found")
+def load_external_data(yaml_path: str = "../external/benchmark_results.yaml") -> pd.DataFrame:
+    """Load external METR benchmark data points for overlay on plots."""
+    if not Path(yaml_path).exists():
+        print(f"Warning: External data file {yaml_path} not found")
         return pd.DataFrame()
     
-    df = pd.read_csv(csv_path)
+    with open(yaml_path, 'r') as f:
+        data = yaml.safe_load(f)
     
-    # Parse release_date to decimal year format (matching our timeline plots)
-    # Handle missing dates (like for 'human' row)
-    df['release_year'] = pd.to_datetime(df['release_date'], errors='coerce')
-    df['release_year_decimal'] = df['release_year'].dt.year + (df['release_year'].dt.month - 1) / 12 + (df['release_year'].dt.day - 1) / 365
+    records = []
     
-    # Remove rows without valid dates
-    df = df.dropna(subset=['release_year_decimal'])
+    # Extract data for each model
+    for model_name, model_data in data.get('results', {}).items():
+        release_date = model_data.get('release_date')
+        if not release_date:
+            continue
+            
+        # Parse release_date to decimal year format
+        try:
+            release_dt = pd.to_datetime(release_date)
+            release_year_decimal = (release_dt.year + 
+                                  (release_dt.month - 1) / 12 + 
+                                  (release_dt.day - 1) / 365)
+        except:
+            print(f"Warning: Could not parse release_date for {model_name}: {release_date}")
+            continue
+        
+        # Extract p80_horizon_length estimate from agents data
+        agents_data = model_data.get('agents', {})
+        for agent_name, agent_data in agents_data.items():
+            p80_data = agent_data.get('p80_horizon_length', {})
+            p80_estimate = p80_data.get('estimate')
+            
+            if p80_estimate is not None:
+                records.append({
+                    'model_name': model_name,
+                    'agent_name': agent_name,
+                    'release_date': release_date,
+                    'release_year_decimal': release_year_decimal,
+                    'p80': p80_estimate  # This is already in minutes according to the YAML
+                })
     
-    print(f"Loaded {len(df)} external data points from {csv_path}")
+    df = pd.DataFrame(records)
+    print(f"Loaded {len(df)} external METR data points from {yaml_path}")
     return df
 
 def format_year_month(year_decimal: float) -> str:
@@ -120,7 +147,7 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     ax.spines['right'].set_visible(False)
     
     # Add legend
-    legend = ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=1.0)
+    legend = ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
     
     # Configure ticks
@@ -130,7 +157,7 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     
     return fig
 
-def plot_march_2027_trajectories(all_forecaster_results: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, config: dict) -> plt.Figure:
+def plot_march_2027_trajectories(all_forecaster_results: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, config: dict, forecaster_filter: list[str] = None) -> plt.Figure:
     """Create plot showing time horizon trajectories for runs that reach SC in March 2027."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
@@ -160,6 +187,9 @@ def plot_march_2027_trajectories(all_forecaster_results: dict, all_forecaster_tr
     
     # Plot trajectories for each forecaster
     for name, results in all_forecaster_results.items():
+        if forecaster_filter and name not in forecaster_filter:
+            continue
+        
         trajectories = all_forecaster_trajectories[name]
         
         # Get the base name without any parenthetical text for config lookup
@@ -396,7 +426,7 @@ def plot_march_2027_trajectories(all_forecaster_results: dict, all_forecaster_tr
     ax.spines['right'].set_visible(False)
     
     # Add legend
-    legend = ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=1.0)
+    legend = ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
     
     # Configure ticks
@@ -406,7 +436,7 @@ def plot_march_2027_trajectories(all_forecaster_results: dict, all_forecaster_tr
     
     return fig
 
-def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all_forecaster_samples: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True) -> plt.Figure:
+def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all_forecaster_samples: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True, forecaster_filter: list[str] = None) -> plt.Figure:
     """Create plot showing backcasted time horizon trajectories."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
@@ -429,6 +459,9 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
     
     # Plot backcasted trajectories for each forecaster
     for name, trajectories in all_forecaster_backcast_trajectories.items():
+        if forecaster_filter and name not in forecaster_filter:
+            continue
+        
         # Get the base name without any parenthetical text for config lookup
         base_name = name.split(" (")[0].lower()
         # Get color from config
@@ -500,7 +533,7 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
             
             if not visible_data.empty:
                 ax.scatter(visible_data['release_year_decimal'], visible_data['p80'], 
-                          color='black', s=50, alpha=0.8, zorder=15, marker='o',
+                          color='black', s=25, alpha=0.8, zorder=15, marker='o',
                           label='External Benchmarks (p80)')
                 print(f"Overlaid {len(visible_data)} external benchmark points")
     
@@ -619,10 +652,10 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
             if external_df[time_mask].shape[0] > 0:
                 legend_elements.append(
                     Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                           markersize=8, label='External Benchmarks (p80)', linestyle='None')
+                           markersize=4, label='External Benchmarks (p80)', linestyle='None')
                 )
       
-    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=1.0)
+    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
     
     # Configure ticks
@@ -632,7 +665,7 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
     
     return fig
 
-def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True) -> plt.Figure:
+def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True, forecaster_filter: list[str] = None) -> plt.Figure:
     """Create plot showing both backcasted and forecasted time horizon trajectories."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
@@ -656,6 +689,9 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
     
     # Plot trajectories for each forecaster
     for name in all_forecaster_backcast_trajectories.keys():
+        if forecaster_filter and name not in forecaster_filter:
+            continue
+        
         backcast_trajectories = all_forecaster_backcast_trajectories[name]
         forecast_trajectories = all_forecaster_trajectories[name]
         samples = all_forecaster_samples[name]
@@ -732,7 +768,7 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
             
             if not visible_data.empty:
                 ax.scatter(visible_data['release_year_decimal'], visible_data['p80'], 
-                          color='black', s=50, alpha=0.8, zorder=15, marker='o',
+                          color='black', s=25, alpha=0.8, zorder=15, marker='o',
                           label='External Benchmarks (p80)')
                 print(f"Overlaid {len(visible_data)} external benchmark points")
     
@@ -838,11 +874,11 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
             if external_df[time_mask].shape[0] > 0:
                 legend_elements.append(
                     Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                           markersize=8, label='External Benchmarks (p80)', linestyle='None')
+                           markersize=4, label='External Benchmarks (p80)', linestyle='None')
                 )
     
 
-    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=1.0)
+    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
     
     # Configure ticks
@@ -852,7 +888,7 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
     
     return fig
 
-def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, all_forecaster_results: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True, plot_central_trajectory: bool = True, plot_median_curve: bool = False, overlay_illustrative_trend: bool = False, add_agent_checkpoints: bool = False) -> plt.Figure:
+def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, all_forecaster_results: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True, plot_central_trajectory: bool = True, plot_median_curve: bool = False, overlay_illustrative_trend: bool = False, add_agent_checkpoints: bool = False, forecaster_filter: list[str] = None) -> plt.Figure:
     """Create plot showing both backcasted and forecasted trajectories for March 2027 SC arrivals only."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
@@ -885,6 +921,9 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
 
     # Plot trajectories for each forecaster
     for name in all_forecaster_backcast_trajectories.keys():
+        if forecaster_filter and name not in forecaster_filter:
+            continue
+        
         backcast_trajectories = all_forecaster_backcast_trajectories[name]
         forecast_trajectories = all_forecaster_trajectories[name]
         samples = all_forecaster_samples[name]
@@ -997,7 +1036,7 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
             
             if not visible_data.empty:
                 ax.scatter(visible_data['release_year_decimal'], visible_data['p80'], 
-                          color='black', s=50, alpha=0.8, zorder=15, marker='o',
+                          color='black', s=25, alpha=0.8, zorder=15, marker='o',
                           label='External Benchmarks (p80)')
                 print(f"Overlaid {len(visible_data)} external benchmark points")
     
@@ -1106,7 +1145,7 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
             if external_df[time_mask].shape[0] > 0:
                 legend_elements.append(
                     Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                           markersize=8, label='METR 80% Time Horizon Data', linestyle='None')
+                           markersize=4, label='METR 80% Time Horizon Data', linestyle='None')
                 )
     
     if plot_median_curve:
@@ -1118,7 +1157,7 @@ def plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories: 
             Line2D([0], [0], color='black', linewidth=2, label='Previous Illustrative Trend')
         )
     
-    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=1.0)
+    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
     
     # Configure ticks
