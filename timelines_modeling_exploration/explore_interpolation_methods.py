@@ -61,9 +61,9 @@ def create_interpolation_model():
     baseline_progress_multiplier = 1.1
     baseline_date = datetime(2025, 2, 1)
     
-    # 60 months later: progress multiplier = 8.5
+    # 70 months later: progress multiplier = 8.5
     future_progress_multiplier = 8.5
-    future_months = 60
+    future_months = 70
     
     # Calculate monthly multiplier on (progress multiplier - 1)
     # (progress_multiplier - 1) = baseline_excess * r^months
@@ -72,7 +72,7 @@ def create_interpolation_model():
     baseline_excess = baseline_progress_multiplier - 1  # 0.1
     future_excess = future_progress_multiplier - 1      # 7.5
     
-    # r^60 = future_excess / baseline_excess = 7.5 / 0.1 = 75
+    # r^70 = future_excess / baseline_excess = 7.5 / 0.1 = 75
     monthly_multiplier = (future_excess / baseline_excess) ** (1/future_months)
     
     print(f"Monthly multiplier (r): {monthly_multiplier:.6f}")
@@ -350,6 +350,115 @@ def fit_double_exponential_to_data(df):
         except:
             return None, x_data, y_data, model_names, 0, 0
 
+def fit_double_exponential_to_data_months_since_gpt2(df):
+    """Fit a double exponential to the progress multiplier data using 2024-months since GPT-2 (historical data only)"""
+    # Convert to 2024-years for each data point
+    model_2024_years_orig, parsed_dates = convert_to_2024_years(df)
+    
+    # Find GPT-2 date and its 2024-years value
+    gpt2_date = None
+    gpt2_2024_years = None
+    reference_date = datetime(2025, 2, 1)  # Claude 3.7 Sonnet reference
+    
+    for idx, row in df.iterrows():
+        try:
+            if 'GPT-2' in str(row['Column 1']):
+                month, year = row['Date'].split('/')
+                gpt2_date = datetime(int(year), int(month), 1)
+                gpt2_2024_years = model_2024_years_orig[idx]
+                break
+        except:
+            continue
+    
+    if gpt2_date is None or gpt2_2024_years is None:
+        print("Could not find GPT-2 data point")
+        return None, None, None, None, 0
+    
+    # Parse data and convert to 2024-months since GPT-2 (NO target point added)
+    months_since_gpt2 = []
+    progress_multiplier_apr2025 = []
+    model_names = []
+    
+    for idx, row in df.iterrows():
+        try:
+            if model_2024_years_orig[idx] is not None:
+                # Convert 2024-years to 2024-months since GPT-2
+                months_since_gpt2_val = (model_2024_years_orig[idx] - gpt2_2024_years) * 12
+                months_since_gpt2.append(months_since_gpt2_val)
+                # Get progress multiplier w/Apr 2025 as 1
+                progress_multiplier_apr2025.append(row['Progress multiplier w/Apr 2025 as 1'])
+                model_names.append(row['Column 1'])
+        except:
+            continue
+    
+    # Convert to numpy arrays (NO target point added)
+    x_data = np.array(months_since_gpt2)
+    y_data = np.array(progress_multiplier_apr2025)
+    
+    # Fit double exponential
+    # Initial guess for parameters [a, b, c]
+    # We expect the function to grow, so let's start with reasonable values
+    initial_guess = [0.9, 0.001, 0.001]  # Smaller c since we're using months
+    
+    try:
+        # Set bounds for parameters to help with convergence
+        # Lower bounds: [a_min, b_min, c_min]
+        # Upper bounds: [a_max, b_max, c_max]
+        lower_bounds = [0.01, -10, 0.0001]  # Smaller c bounds for months
+        upper_bounds = [2.0, 10, 0.1]       # Smaller c bounds for months
+        
+        # Fit the double exponential
+        popt, pcov = curve_fit(double_exponential, x_data, y_data, 
+                              p0=initial_guess, bounds=(lower_bounds, upper_bounds), 
+                              maxfev=10000)
+        
+        # Calculate R-squared
+        y_pred = double_exponential(x_data, *popt)
+        ss_res = np.sum((y_data - y_pred) ** 2)
+        ss_tot = np.sum((y_data - np.mean(y_data)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot)
+        
+        print(f"\nDouble Exponential Fit Results (2024-months since GPT-2, historical data only):")
+        print(f"Parameters: a={popt[0]:.6f}, b={popt[1]:.6f}, c={popt[2]:.6f}")
+        print(f"R-squared: {r_squared:.4f}")
+        print(f"Data points used: {len(x_data)} (historical data only)")
+        print(f"GPT-2 date: {gpt2_date.strftime('%b %Y')}")
+        print(f"GPT-2 is at 0 months in this scale")
+        
+        # Print residuals for debugging
+        print(f"\nResiduals Analysis (2024-months since GPT-2):")
+        for i, model in enumerate(model_names):
+            residual = y_data[i] - y_pred[i]
+            print(f"{model}: actual={y_data[i]:.4f}, predicted={y_pred[i]:.4f}, residual={residual:.4f}, months={x_data[i]:.1f}")
+        
+        print(f"Mean absolute error: {np.mean(np.abs(y_data - y_pred)):.6f}")
+        print(f"Max absolute error: {np.max(np.abs(y_data - y_pred)):.6f}")
+        
+        return popt, x_data, y_data, model_names, r_squared
+        
+    except Exception as e:
+        print(f"Double exponential fitting (months since GPT-2) failed: {e}")
+        # Try a simpler exponential fit as fallback
+        try:
+            print("Trying simple exponential fit as fallback...")
+            def simple_exp(x, a, b):
+                return a * np.exp(b * x)
+            
+            popt_simple, _ = curve_fit(simple_exp, x_data, y_data, maxfev=10000)
+            y_pred = simple_exp(x_data, *popt_simple)
+            ss_res = np.sum((y_data - y_pred) ** 2)
+            ss_tot = np.sum((y_data - np.mean(y_data)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot)
+            
+            print(f"Simple exponential fit: a={popt_simple[0]:.6f}, b={popt_simple[1]:.6f}")
+            print(f"R-squared: {r_squared:.4f}")
+            
+            # Convert to double exponential format for consistency
+            popt_converted = [popt_simple[0], popt_simple[1], 0.0]
+            return popt_converted, x_data, y_data, model_names, r_squared
+        except:
+            return None, x_data, y_data, model_names, 0
+
 def load_and_plot_aird_estimates():
     """Load AIRD estimates CSV and plot progress multiplier vs. 80% time horizon"""
     
@@ -492,12 +601,12 @@ def load_and_plot_aird_estimates():
     # Print interpolation validation
     print("\nClaude 3.7 Sonnet Baseline Interpolation Validation:")
     print(f"At baseline (Claude 3.7 Sonnet, Feb 2025, 0 2024-years): {interpolate_fn(0):.3f}")
-    print(f"At 30 months (halfway to target, 2.5 2024-years): {interpolate_fn(30):.3f}")
-    print(f"At 60 months (target, 5 2024-years): {interpolate_fn(60):.3f}")
+    print(f"At 35 months (halfway to target, 2.92 2024-years): {interpolate_fn(35):.3f}")
+    print(f"At 70 months (target, 5.83 2024-years): {interpolate_fn(70):.3f}")
     
     # Calculate what the geomean formula gives for verification
     geomean_result = np.sqrt((1.1 - 1) * (8.5 - 1)) + 1
-    print(f"Geomean formula result for 30 months: {geomean_result:.3f}")
+    print(f"Geomean formula result for 35 months: {geomean_result:.3f}")
     
     # Print backcast examples (comparison of methods)
     print("\nBackcast Examples (Calendar years vs 2024-years comparison):")
@@ -924,7 +1033,10 @@ def load_and_plot_aird_estimates():
     # Second fit with target point included
     popt, x_data, y_data, model_names_de, r_squared, r_squared_hist = fit_double_exponential_to_data(df)
     
-    if popt is not None or popt_orig is not None:
+    # Third fit using 2024-months since GPT-2
+    popt_months, x_data_months, y_data_months, model_names_months, r_squared_months = fit_double_exponential_to_data_months_since_gpt2(df)
+    
+    if popt is not None or popt_orig is not None or popt_months is not None:
         # Calculate 2024-years for Claude 3.7 Sonnet and 60 months later
         claude_37_2024_years = 0.0  # Claude 3.7 Sonnet is the reference point
         target_2024_years = 5.0  # 60 months = 5 years in 2024-years
@@ -991,7 +1103,7 @@ def load_and_plot_aird_estimates():
             # Customize first plot
             ax1.set_xlabel('2024-years', fontsize=12)
             ax1.set_ylabel('Progress Multiplier w/Apr 2025 as 1 (log scale)', fontsize=12)
-            ax1.set_title('Double Exponential Fit (Historical Data Only)', fontsize=14)
+            ax1.set_title('Double Exponential Fit (2024-years, includes negatives)', fontsize=14)
             ax1.grid(True, alpha=0.3)
             ax1.legend()
             
@@ -1105,6 +1217,84 @@ def load_and_plot_aird_estimates():
         
         # Show the plot
         plt.show()
+        
+        # NEW: Add the 2024-months since GPT-2 plot
+        if popt_months is not None:
+            print(f"\n" + "="*50)
+            print("DOUBLE EXPONENTIAL ANALYSIS (2024-months since GPT-2)")
+            print("="*50)
+            
+            # Calculate extrapolated target value
+            # Find Claude 3.7 Sonnet months value first
+            claude_37_months = 0  # Will be calculated from data
+            for i, model in enumerate(model_names_months):
+                if 'Claude 3.7 Sonnet' in model:
+                    claude_37_months = x_data_months[i]
+                    break
+            
+            # Calculate target at 60 months after Claude 3.7 Sonnet
+            target_months = claude_37_months + 60
+            target_value_months = double_exponential(target_months, *popt_months)
+            
+            print(f"Extrapolated value at 60 months after Claude 3.7 Sonnet: {target_value_months:.6f}")
+            
+            fig_months = plt.figure(figsize=(12, 8))
+            ax_months = fig_months.add_subplot(111)
+            
+            # Plot historical data points
+            ax_months.scatter(x_data_months, y_data_months, 
+                             s=100, alpha=0.7, color='red', label='Historical Data', zorder=5)
+            
+            # Add model names as labels
+            for i, model in enumerate(model_names_months):
+                ax_months.annotate(model, (x_data_months[i], y_data_months[i]), 
+                                  xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
+            
+            # Create smooth curve for fitted function (extended to show extrapolation)
+            x_smooth_months = np.linspace(min(x_data_months), target_months, 1000)
+            y_smooth_months = double_exponential(x_smooth_months, *popt_months)
+            
+            # Plot fitted curve
+            ax_months.plot(x_smooth_months, y_smooth_months, color='blue', linewidth=2, alpha=0.8, 
+                          label=f'Double Exponential Fit (R² = {r_squared_months:.4f})')
+            
+            # Plot extrapolated target point
+            ax_months.scatter([target_months], [target_value_months], s=100, alpha=0.7, color='green', 
+                             label=f'Extrapolated Target: {target_value_months:.3f}', zorder=5, marker='s')
+            
+            # Add vertical line at GPT-2 (0 months)
+            ax_months.axvline(x=0, color='green', linestyle=':', alpha=0.7, label='GPT-2 (Feb 2019)')
+            
+            # Add vertical line at Claude 3.7 Sonnet
+            ax_months.axvline(x=claude_37_months, color='purple', linestyle=':', alpha=0.7, 
+                             label='Claude 3.7 Sonnet (Feb 2025)')
+            
+            # Add vertical line at target (60 months after Claude 3.7 Sonnet)
+            ax_months.axvline(x=target_months, color='orange', linestyle=':', alpha=0.7, 
+                             label='60 months after Claude 3.7 Sonnet')
+            
+            # Add horizontal line at extrapolated target value
+            ax_months.axhline(y=target_value_months, color='green', linestyle='--', alpha=0.5)
+            
+            # Add text showing extrapolated target value
+            ax_months.text(target_months, target_value_months, f'  {target_value_months:.3f}', 
+                          verticalalignment='center', fontsize=12, color='green', fontweight='bold')
+            
+            # Set log scale for y-axis
+            ax_months.set_yscale('log')
+            
+            # Customize plot
+            ax_months.set_xlabel('2024-months since GPT-2', fontsize=12)
+            ax_months.set_ylabel('Progress Multiplier w/Apr 2025 as 1 (log scale)', fontsize=12)
+            ax_months.set_title('Double Exponential Fit (2024-months from GPT-2=0)', fontsize=14)
+            ax_months.grid(True, alpha=0.3)
+            ax_months.legend()
+            
+            # Make layout tight
+            plt.tight_layout()
+            
+            # Show the plot
+            plt.show()
         
     else:
         print("Double exponential fitting failed - skipping plot")
