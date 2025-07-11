@@ -45,14 +45,6 @@ agg = df.groupby('Year', as_index=False).agg({
     'AGI_Researchers_Corp': 'sum'
 }).sort_values('Year')
 
-# --- Step 3: Academic AGI researchers ---
-initial_acad = agg.loc[agg['Year'] == 2011, 'AGI_Researchers_Corp'].iloc[0]
-agg['Academic_AGI'] = initial_acad * (1.25 ** (agg['Year'] - 2011))
-
-# Combine series
-agg['Researchers_All'] = agg['Researchers_Corp'] + agg['Academic_AGI']
-agg['AGI_Researchers_All_Companies'] = agg['AGI_Researchers_Corp'] + agg['Academic_AGI']
-
 # --- Step 4: External AGI researchers (30% of corporate AGI hires each year) ---
 # Aggregate corporate AGI hires by year from the original hires data
 df_yearly_agi_hires = df.groupby('Year', as_index=False)['AGI_Researcher_Increase'].sum()
@@ -61,7 +53,14 @@ df_yearly_agi_hires['Other_AGI_Researchers'] = (0.3 * df_yearly_agi_hires['AGI_R
 # Merge into agg
 agg = agg.merge(df_yearly_agi_hires[['Year', 'Other_AGI_Researchers']], on='Year')
 # Total AGI researchers including corporate, academia, and others
-agg['AGI_Researchers_Total'] = agg['AGI_Researchers_All_Companies'] + agg['Other_AGI_Researchers']
+agg['AGI_Researchers_All_Companies'] = agg['AGI_Researchers_Corp'] + agg['Other_AGI_Researchers']
+
+# --- Step 3: Academic AGI researchers ---
+initial_acad = agg.loc[agg['Year'] == 2011, 'AGI_Researchers_All_Companies'].iloc[0] * 2
+agg['Academic_AGI'] = initial_acad * (1.25 ** (agg['Year'] - 2011))
+
+# Combine series
+agg['AGI_Researchers_Total'] = agg['AGI_Researchers_All_Companies'] + agg['Academic_AGI']
 
 # --- Step 5: Compute CAGRs ---
 def compute_cagr(start, end, years):
@@ -101,7 +100,7 @@ import pdb; pdb.set_trace()
 
 # --- Step 6: Output results ---
 print("\n=== Combined Headcounts by Year ===")
-print(agg[['Year', 'Employees', 'Researchers_All', 'AGI_Researchers_All_Companies', 'Other_AGI_Researchers', 'AGI_Researchers_Total']])
+print(agg[['Year', 'Employees', 'AGI_Researchers_All_Companies', 'Other_AGI_Researchers', 'AGI_Researchers_Total']])
 
 print("\n=== CAGR Comparison ===")
 print(cagr_df)
