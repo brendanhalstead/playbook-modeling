@@ -62,6 +62,60 @@ agg['Academic_AGI'] = initial_acad * (1.25 ** (agg['Year'] - 2011))
 # Combine series
 agg['AGI_Researchers_Total'] = agg['AGI_Researchers_All_Companies'] + agg['Academic_AGI']
 
+# --- Step 4.5: Productivity-adjusted AGI researchers ---
+yearly_hires = pd.DataFrame(index=agg['Year'])
+
+# Corporate AGI hires
+corp_hires = df.groupby('Year')['AGI_Researcher_Increase'].sum()
+yearly_hires['Corp_AGI_Hires'] = corp_hires
+
+# Other AGI hires (non-cumulative)
+yearly_hires['Other_AGI_Hires'] = 0.3 * yearly_hires['Corp_AGI_Hires']
+
+# Academic AGI hires
+agg_indexed = agg.set_index('Year')
+yearly_hires['Academic_AGI_Hires'] = agg_indexed['Academic_AGI'].diff().fillna(agg_indexed['Academic_AGI'])
+
+yearly_hires = yearly_hires.fillna(0)
+yearly_hires['Total_AGI_Hires'] = yearly_hires.sum(axis=1)
+
+# Calculate productivity-adjusted workforce
+start_year = yearly_hires.index.min()
+
+# Base productivity for cohort hired in year `y` (decreases by 5% each year, starting from 2016)
+cohort_base_productivity = {year: 0.95**max(0, year - 2015) for year in yearly_hires.index}
+
+pa_workforce = []
+for t in yearly_hires.index:
+    effective_workforce_t = 0
+    for y in range(start_year, t + 1):
+        hires_in_y = yearly_hires.loc[y, 'Total_AGI_Hires']
+        # Productivity of cohort from year y, in year t (increases by 15% each year after hiring)
+        productivity_y_at_t = cohort_base_productivity[y] * (1.15**(t - y))
+        effective_workforce_t += hires_in_y * productivity_y_at_t
+    pa_workforce.append(effective_workforce_t)
+
+agg['PA_AGI_Researchers_Total'] = pa_workforce
+
+# Initialize cohort productivity
+yearly_hires = yearly_hires.sort_index()
+yearly_hires['Cohort_Productivity'] = 1.0
+for i in range(1, len(yearly_hires)):
+    yearly_hires.iloc[i, yearly_hires.columns.get_loc('Cohort_Productivity')] = yearly_hires.iloc[i-1, yearly_hires.columns.get_loc('Cohort_Productivity')] * 0.95
+
+# Compute effective employees
+effective = []
+for year, row in yearly_hires.iterrows():
+    eff = 0.0
+    for hire_year, hire_row in yearly_hires.iterrows():
+        if hire_year <= year:
+            age = year - hire_year
+            p0 = hire_row['Cohort_Productivity']
+            eff += hire_row['Total_AGI_Hires'] * p0 * (1.15 ** age)
+    effective.append(eff)
+agg['Effective_Employees'] = effective
+
+
 # --- Step 5: Compute CAGRs ---
 def compute_cagr(start, end, years):
     return (end / start) ** (1 / years) - 1 if years > 0 else float('nan')
@@ -72,7 +126,9 @@ series = [
     ('Total Researchers (companies in data)', 'Researchers_Corp'),
     ('Total AGI Researchers (companies in data)', 'AGI_Researchers_Corp'),
     ('Total AGI Researchers (all companies)', 'AGI_Researchers_All_Companies'),
-    ('Total AGI Reserarchers (incl acad)', 'AGI_Researchers_Total')
+    ('Total AGI Reserarchers (incl acad)', 'AGI_Researchers_Total'),
+    ('Productivity-Adjusted AGI Researchers', 'PA_AGI_Researchers_Total'),
+    ('Effective Employees', 'Effective_Employees'),
 ]
 cagr_results = []
 for label, col in series:
@@ -96,11 +152,9 @@ df.to_csv(os.path.join(output_dir, 'full_df.csv'), index=False)
 cagr_df.to_csv(os.path.join(output_dir, 'cagr_df.csv'), index=False)
 
 
-import pdb; pdb.set_trace()
-
 # --- Step 6: Output results ---
 print("\n=== Combined Headcounts by Year ===")
-print(agg[['Year', 'Employees', 'AGI_Researchers_All_Companies', 'Other_AGI_Researchers', 'AGI_Researchers_Total']])
+print(agg[['Year', 'Employees', 'AGI_Researchers_All_Companies', 'Other_AGI_Researchers', 'AGI_Researchers_Total', 'PA_AGI_Researchers_Total', 'Effective_Employees']])
 
 print("\n=== CAGR Comparison ===")
 print(cagr_df)
@@ -112,6 +166,8 @@ for col, label in [
     # ('Researchers_All', 'Researchers (incl acad)'),
     # ('AGI_Researchers_All', 'Total AGI Researchers (incl acad)'),
     # ('AGI_Researchers_Total', 'AGI Researchers + Others')
+    ('Effective_Employees', 'Effective Employees'),
+    ('PA_AGI_Researchers_Total', 'Productivity-Adjusted AGI Researchers'),
     ('AGI_Researchers_Total', 'Total AGI Researchers (incl acad)'),
     ('AGI_Researchers_All_Companies', 'Total AGI Researchers (all companies)'),
     ('AGI_Researchers_Corp', 'Total AGI Researchers (companies in data)'),
