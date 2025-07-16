@@ -1,0 +1,53 @@
+[
+    {
+        "name": "Leading Project (if full speed)",
+        "enabled_by_default": false,
+        "params": {
+            "initial_software_months_behind": [1, 0, 0, 0],
+            "initial_hardware_multiple": [0, 1, 1, 1],
+            "software_progress_rate": [0, 1, 1, 1]
+        }
+    },
+    {
+        "name": "20x less hardware, uncertainty about rest",
+        "enabled_by_default": false,
+        "params": {
+            "initial_software_months_behind": [0, 1, 18, 24],
+            "initial_hardware_multiple": [0, 0.2, 0.2, 0.2],
+            "software_progress_rate": [0, 0.01, 0.35, 1]
+        }
+    },
+    {
+        "name": "100x less hardware, uncertainty about rest",
+        "enabled_by_default": false,
+        "params": {
+            "initial_software_months_behind": [0, 1, 18, 24],
+            "initial_hardware_multiple": [0, 0.01, 0.01, 0.01],
+            "software_progress_rate": [0, 0.0025, 0.15, 1]
+        }
+    },
+    {
+        "name": "Russia",
+        "enabled_by_default": true,
+        "params": {
+            "initial_software_months_behind": [0, 1, 18, 24],
+            "initial_hardware_multiple": [0, 0.01, 0.2, 0.4],
+            "software_progress_rate": [0, 0.04, 0.5, 1],
+            "schedule_params": {
+                "type": "decay",
+                "eta_days": 5000
+            },
+            "no_resupply": true,
+            "failure_model": "default_weibull"
+        }
+    },
+    {
+        "name": "Open Source Collective (not closely considered)",
+        "enabled_by_default": false,
+        "params": {
+            "initial_software_months_behind": [0, 1, 18, 24],
+            "initial_hardware_multiple": [0, 0.002, 0.05, 0.4],
+            "software_progress_rate": [0, 0.02, 0.3, 1]
+        }
+    }
+] 
