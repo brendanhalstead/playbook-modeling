@@ -152,14 +152,113 @@ df.to_csv(os.path.join(output_dir, 'full_df.csv'), index=False)
 cagr_df.to_csv(os.path.join(output_dir, 'cagr_df.csv'), index=False)
 
 
-# --- Step 6: Output results ---
+# --- Step 7: Future Projections ---
+def get_growth_rate(year):
+    if year <= 2028: return 0.80
+    if year == 2029: return 0.70
+    if year == 2030: return 0.60
+    if year == 2031: return 0.50
+    if year == 2032: return 0.40
+    if year <= 2036: return 0.30
+    if year <= 2040: return 0.20
+    if year <= 2060: return 0.10
+    if year <= 2080: return 0.05
+    if year <= 2100: return 0.03
+    return 0.01 # 2101 onward
+
+future_years = range(2025, 2151)
+projection_df = pd.DataFrame(index=future_years)
+
+# Project AGI_Researchers_Total
+last_researchers = agg.loc[agg['Year'] == 2024, 'AGI_Researchers_Total'].iloc[0]
+projected_researchers = []
+for year in future_years:
+    growth_rate = get_growth_rate(year)
+    last_researchers *= (1 + growth_rate)
+    projected_researchers.append(last_researchers)
+
+projection_df['AGI_Researchers_Total'] = projected_researchers
+
+# Combine historical and projected data
+full_projection = pd.concat([
+    agg.set_index('Year')[['AGI_Researchers_Total']],
+    projection_df[['AGI_Researchers_Total']]
+])
+full_projection = full_projection.sort_index()
+
+# Calculate Total_AGI_Hires for all years
+full_projection['Total_AGI_Hires'] = full_projection['AGI_Researchers_Total'].diff().fillna(
+    full_projection['AGI_Researchers_Total'].iloc[0]
+)
+
+# Calculate Productivity-Adjusted AGI Researchers for all years
+start_year = full_projection.index.min()
+cohort_base_productivity = {year: 0.95**max(0, year - 2015) for year in full_projection.index}
+pa_workforce = []
+for t in full_projection.index:
+    effective_workforce_t = 0
+    for y in range(start_year, t + 1):
+        hires_in_y = full_projection.loc[y, 'Total_AGI_Hires']
+        productivity_y_at_t = cohort_base_productivity[y] * (1.15**(t - y))
+        effective_workforce_t += hires_in_y * productivity_y_at_t
+    pa_workforce.append(effective_workforce_t)
+
+full_projection['PA_AGI_Researchers_Total'] = pa_workforce
+
+# Calculate growth rate of PA_AGI_Researchers_Total
+full_projection['PA_AGI_Researchers_Growth_Rate'] = full_projection['PA_AGI_Researchers_Total'].pct_change()
+
+# Save projection to CSV
+projection_output_path = os.path.join(output_dir, 'labor_growth_projection.csv')
+full_projection.to_csv(projection_output_path)
+
+
+# --- Step 8: Output results ---
 print("\n=== Combined Headcounts by Year ===")
 print(agg[['Year', 'Employees', 'AGI_Researchers_All_Companies', 'Other_AGI_Researchers', 'AGI_Researchers_Total', 'PA_AGI_Researchers_Total', 'Effective_Employees']])
 
 print("\n=== CAGR Comparison ===")
 print(cagr_df)
 
-# --- Step 7: Plotting ---
+print(f"\nProjection data saved to {projection_output_path}")
+print(full_projection.tail())
+
+print("\n=== Projected Total AGI Researchers at Key Milestones ===")
+key_years = [2028, 2029, 2030, 2031, 2032, 2036, 2040, 2061]
+for year in range(2081, 2151, 20):
+    key_years.append(year)
+
+for year in key_years:
+    if year in full_projection.index:
+        researchers = full_projection.loc[year, 'AGI_Researchers_Total']
+        print(f"Year {year}: {researchers:,.0f} Total AGI Researchers")
+
+
+# --- Step 9: Plotting ---
+plt.figure(figsize=(12, 7))
+
+# Plot historical data
+plt.plot(agg['Year'], agg['AGI_Researchers_Total'], 'o-', label='Historical Total AGI Researchers (incl acad)', color='blue')
+plt.plot(agg['Year'], agg['PA_AGI_Researchers_Total'], 's-', label='Historical Productivity-Adjusted AGI Researchers', color='green')
+
+# Plot projected data
+future_projection = full_projection.loc[full_projection.index >= 2024]
+plt.plot(future_projection.index, future_projection['AGI_Researchers_Total'], '--', label='Projected Total AGI Researchers', color='blue')
+plt.plot(future_projection.index, future_projection['PA_AGI_Researchers_Total'], '--', label='Projected Productivity-Adjusted AGI Researchers', color='green')
+
+plt.yscale('log')
+plt.xlabel('Year')
+plt.ylabel('Number of Researchers (log scale)')
+plt.title('Historical and Projected AGI Researcher Growth (2011–2150)')
+plt.legend()
+plt.grid(True, which="both", ls="--", linewidth=0.5)
+plt.tight_layout()
+projection_plot_path = os.path.join(output_dir, 'projected_labor_growth.png')
+plt.savefig(projection_plot_path)
+plt.show()
+
+print(f"Projection plot saved to {projection_plot_path}")
+
 plt.figure(figsize=(10, 6))
 for col, label in [
     # ('Employees', 'Total Employees'),
