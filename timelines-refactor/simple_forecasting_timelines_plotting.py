@@ -269,7 +269,7 @@ def plot_trajectories_sc_month(
                label=sc_month_str, linewidth=2)
 
     # Title & axes labels
-    ax.set_title(f"Time Horizon Trajectories for Runs Reaching SC in {sc_month_str}",
+    ax.set_title(f"Time Horizon Extension Trajectories for Runs Reaching SC in {sc_month_str}",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
     ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
@@ -428,6 +428,11 @@ def plot_combined_trajectories_sc_month(
             back_traj = backcast_traj_list[idx]
             fore_traj = forecast_traj_list[idx]
 
+            # Skip samples with missing or trivially short forward trajectories
+            if not fore_traj or len(fore_traj) <= 1:
+                print("WARNING: omitting trajectory with missing/short forward part")
+                continue
+
             if color_by_growth_type:
                 if samples["is_exponential"][idx]:
                     color = growth_colors["exponential"]
@@ -477,7 +482,7 @@ def plot_combined_trajectories_sc_month(
                 ax.scatter(visible['release_year_decimal'], visible['p80'], color='black', s=25, alpha=0.8, zorder=15, marker='o', label='External Benchmarks (p80)')
 
     # titles & axes
-    ax.set_title(f"Complete Time Horizon Trajectories – {sc_month_str} SC Arrivals", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_title(f"Complete Time Horizon Extension Trajectories – {sc_month_str} SC Arrivals", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
     ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
@@ -911,7 +916,19 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
     
     return fig
 
-def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_forecaster_trajectories: dict, all_forecaster_samples: dict, config: dict, color_by_growth_type: bool = True, overlay_external_data: bool = True, forecaster_filter: list[str] = None) -> plt.Figure:
+def plot_combined_trajectories(
+    all_forecaster_backcast_trajectories: dict,
+    all_forecaster_trajectories: dict,
+    all_forecaster_samples: dict,
+    config: dict,
+    *,
+    color_by_growth_type: bool = True,
+    overlay_external_data: bool = True,
+    plot_central_trajectory: bool = True,
+    plot_median_curve: bool = False,
+    add_agent_checkpoints: bool = False,
+    forecaster_filter: list[str] = None,
+) -> plt.Figure:
     """Create plot showing both backcasted and forecasted time horizon trajectories."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
@@ -932,8 +949,10 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
     x_max = current_year + forecast_years
     
     total_trajectories_plotted = 0
-    
-    # Plot trajectories for each forecaster
+    # Collect combined (backcast+forecast) paths for central/median computation
+    all_combined_paths: list[dict] = []
+    best_path: dict | None = None
+
     for name in all_forecaster_backcast_trajectories.keys():
         if forecaster_filter and name not in forecaster_filter:
             continue
@@ -953,7 +972,7 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
                 growth_types.append("subexponential")
         
         # Plot a subset of trajectories to avoid overcrowding
-        max_trajectories_to_plot = 100  # Fewer trajectories for combined plot
+        max_trajectories_to_plot = 1000  # Fewer trajectories for combined plot
         n_to_plot = min(max_trajectories_to_plot, len(backcast_trajectories), len(forecast_trajectories))
         
         print(f"{name}: Plotting {n_to_plot} combined trajectories (backcast + forecast)")
@@ -972,6 +991,11 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
         
         # Plot combined trajectories
         for i in range(n_to_plot):
+            # Skip samples with missing or trivially short forward trajectories
+            if not forecast_trajectories[i] or len(forecast_trajectories[i]) <= 1:
+                print("WARNING: omitting trajectory with missing/short forward part")
+                continue
+
             backcast_traj = backcast_trajectories[i]
             forecast_traj = forecast_trajectories[i]
             growth_type = growth_types[i]
@@ -982,17 +1006,32 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
                 color = forecaster_color
             
             # Plot backcast trajectory (past)
+            combined_t = []
+            combined_h = []
+
             if backcast_traj:
                 back_times, back_horizons = zip(*backcast_traj)
-                ax.plot(back_times, back_horizons, '-', color=color, alpha=0.15, linewidth=0.8)
-            
+                ax.plot(back_times, back_horizons, '-', color=color, alpha=0.10, linewidth=0.8)
+                combined_t.extend(back_times)
+                combined_h.extend(back_horizons)
+
             # Plot forecast trajectory (future)
             if forecast_traj:
                 fore_times, fore_horizons = zip(*forecast_traj)
-                ax.plot(fore_times, fore_horizons, '-', color=color, alpha=0.15, linewidth=0.8)
-            
+                ax.plot(fore_times, fore_horizons, '-', color=color, alpha=0.10, linewidth=0.8)
+                combined_t.extend(fore_times)
+                combined_h.extend(fore_horizons)
+
+            # Store path for central/median logic
+            if combined_t:
+                order = np.argsort(combined_t)
+                all_combined_paths.append({
+                    'times': np.array(combined_t)[order],
+                    'horizons': np.array(combined_h)[order]
+                })
+
             total_trajectories_plotted += 1
-    
+
     print(f"\nTotal combined trajectories plotted: {total_trajectories_plotted}")
     
     # Add current horizon line (where trajectories converge)
@@ -1019,7 +1058,7 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
                 print(f"Overlaid {len(visible_data)} external benchmark points")
     
     # Configure plot
-    ax.set_title("Complete Time Horizon Trajectories\n(Historical development and future projections)",
+    ax.set_title("Complete Time Horizon Extension Trajectories\n(Historical development and future projections)",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
     ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
@@ -1081,7 +1120,7 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
     ]
     
     # Filter ticks to be within range
-    valid_ticks = [(pos, label) for pos, label in all_ticks if y_min <= pos <= y_max]
+    valid_ticks = [(pos, lab) for pos, lab in all_ticks if y_min <= pos <= y_max]
     
     # Set the final ticks
     if valid_ticks:
@@ -1089,49 +1128,77 @@ def plot_combined_trajectories(all_forecaster_backcast_trajectories: dict, all_f
         ax.set_yticks(tick_positions)
         ax.set_yticklabels(tick_labels)
     
-    # Grid and spines
+    # -------------------------------------------------------------
+    # Median / Central trajectory plotting (borrowed from _sc_month)
+    # -------------------------------------------------------------
+    if plot_central_trajectory and all_combined_paths:
+        x_grid = np.arange(x_min, x_max + 1e-6, 1/12)
+        matrix = np.full((len(all_combined_paths), len(x_grid)), np.nan)
+        for i, p in enumerate(all_combined_paths):
+            mask = (x_grid >= p['times'][0]) & (x_grid <= p['times'][-1])
+            if mask.any():
+                matrix[i, mask] = np.log10(np.interp(x_grid[mask], p['times'], p['horizons']))
+
+        median_curve = np.nanmedian(matrix, axis=0)
+        valid = ~np.isnan(median_curve)
+
+        if plot_median_curve and valid.any():
+            ax.plot(x_grid[valid], 10**median_curve[valid], color='red', linewidth=2, linestyle=':', label='Median Trajectory', zorder=49)
+
+        if valid.any():
+            distances = np.nansum(np.abs(matrix - median_curve), axis=1)
+            best_idx = np.nanargmin(distances)
+            best_path = all_combined_paths[int(best_idx)]
+            ax.plot(best_path['times'], best_path['horizons'], color='green', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+
+            # Optional annotated checkpoints
+            if add_agent_checkpoints:
+                checkpoints = [
+                    (2025 + 7/12, 'Agent-0'),
+                    (2026 + 2/12, 'Agent-1'),
+                    (2027 + 6/12, 'Agent-3-mini'),
+                ]
+                t_arr = best_path['times']
+                h_arr = best_path['horizons']
+                for t_pt, label in checkpoints:
+                    if t_pt < t_arr[0] or t_pt > t_arr[-1]:
+                        continue
+                    h_pt = np.interp(t_pt, t_arr, h_arr)
+                    ax.scatter(t_pt, h_pt, color='green', s=40, zorder=49)
+                    ax.annotate(label, (t_pt, h_pt), textcoords='offset points', xytext=(5, -5), ha='left', fontsize=config['plotting_style']['font']['sizes']['ticks'], color='black')
+
+    # Grid and spines (drawn after trajectories & central path)
     ax.grid(True, alpha=0.2, zorder=0)
     ax.set_axisbelow(True)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    
-    # Add legend
-    from matplotlib.lines import Line2D
-    legend_elements = [
-        Line2D([0], [0], color='red', linestyle='-', linewidth=3, label='Current Horizon (15 min)'),
-        Line2D([0], [0], color='blue', linestyle='--', linewidth=2, label='Current Time')
-    ]
-    
-    if color_by_growth_type:
-        legend_elements.extend([
-            Line2D([0], [0], color='#2E8B57', linewidth=2, label='Exponential Growth'),
-            Line2D([0], [0], color='#FF6347', linewidth=2, label='Superexponential Growth'), 
-            Line2D([0], [0], color='#4169E1', linewidth=2, label='Subexponential Growth')
-        ])
-    else:
-        legend_elements.append(
-            Line2D([0], [0], color='gray', linewidth=2, label='Combined Trajectories')
-        )
-    
-    # Add external data to legend if present
-    if overlay_external_data:
-        external_df = load_external_data()
-        if not external_df.empty:
-            time_mask = (external_df['release_year_decimal'] >= x_min) & (external_df['release_year_decimal'] <= x_max)
-            if external_df[time_mask].shape[0] > 0:
-                legend_elements.append(
-                    Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                           markersize=4, label='External Benchmarks (p80)', linestyle='None')
-                )
-    
-    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
+
+    # ------------------------------------------------------------------
+    # Legend – keep ordering clear: reference lines first, then trajectories
+    # ------------------------------------------------------------------
+    handles, labels = ax.get_legend_handles_labels()
+    # Ensure reference lines appear first
+    ref_order = [label for label in labels if label in (
+        "Current Horizon (15 min)",
+        "Current Time",
+        "External Benchmarks (p80)",
+    )]
+    traj_order = [label for label in labels if label not in ref_order]
+    ordered_labels = ref_order + traj_order
+    ordered_handles = [handles[labels.index(lab)] for lab in ordered_labels]
+    legend = ax.legend(
+        ordered_handles,
+        ordered_labels,
+        fontsize=config["plotting_style"]["font"]["sizes"]["legend"],
+        framealpha=0.5,
+    )
     legend.set_zorder(50)
-    
-    # Configure ticks
+
+    # Final tick configuration
     ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
-    
+
     return fig
 
 # -----------------------------------------------------------------------------
@@ -1143,6 +1210,7 @@ def plot_central_trajectories_comparison(
     config: dict,
     *,
     overlay_external_data: bool = True,
+    title: str = "Time Horizon Extension Central Trajectories Comparison",
 ) -> plt.Figure:
     """Plot a set of *central trajectories* on a shared figure.
 
@@ -1237,7 +1305,7 @@ def plot_central_trajectories_comparison(
     # ------------------------------------------------------------------
     # Axes formatting (titles, labels, log-scale, ticks)
     # ------------------------------------------------------------------
-    ax.set_title("Central Trajectories Comparison", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_title(title, fontsize=config["plotting_style"]["font"]["sizes"]["title"])
     ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 

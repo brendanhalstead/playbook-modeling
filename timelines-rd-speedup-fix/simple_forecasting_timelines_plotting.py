@@ -430,6 +430,7 @@ def plot_combined_trajectories_sc_month(
 
             # Skip samples with missing or trivially short forward trajectories
             if not fore_traj or len(fore_traj) <= 1:
+                print("WARNING: omitting trajectory with missing/short forward part")
                 continue
 
             if color_by_growth_type:
@@ -992,6 +993,7 @@ def plot_combined_trajectories(
         for i in range(n_to_plot):
             # Skip samples with missing or trivially short forward trajectories
             if not forecast_trajectories[i] or len(forecast_trajectories[i]) <= 1:
+                print("WARNING: omitting trajectory with missing/short forward part")
                 continue
 
             backcast_traj = backcast_trajectories[i]
