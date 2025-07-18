@@ -537,6 +537,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     fig.savefig(output_dir / "simple_combined_headline.png", dpi=300, bbox_inches="tight")
 
     plt.close(fig)
+
+    monthly_central_trajectories_by_forecaster = {}
     for forecaster_name in all_forecaster_results.keys():
         # --- Figures that are independent of a specific SC month ---
         fig_backcasted_colored = plot_backcasted_trajectories(
@@ -600,13 +602,142 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         plt.close(fig_backcasted_red)
         plt.close(fig_combined_colored)
         plt.close(fig_combined_red)
-        plt.close(fig_combined_march_2027)
 
+        # --- Figures filtered by specific SC arrival months ---
+        target_months = [
+            # March targets
+            # "March 2027",
+            # "March 2028",
+            # "March 2029",
+            # "March 2030",
+            # # September targets
+            # "September 2027",
+            # "September 2028",
+            # "September 2029",
+            # "September 2030",
+        ]
 
+        # Collect central trajectories per month for later comparison
+        central_trajs_by_month: dict[str, dict] = {}
+
+        for sc_month_str in target_months:
+            month_slug = sc_month_str.lower().replace(" ", "_")  # e.g. "march_2028"
+
+            # Trajectory plot filtered by SC month
+            fig_trajectories = plot_trajectories_sc_month(
+                all_forecaster_results,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                config,
+                sc_month_str=sc_month_str,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # Combined trajectory plots filtered by SC month
+            fig_combined_month, central_path = plot_combined_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # Store central trajectory if available
+            if central_path is not None:
+                central_trajs_by_month[sc_month_str] = central_path
+
+            fig_combined_month_median, _ = plot_combined_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                plot_median_curve=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            fig_combined_month_illustrative, _ = plot_combined_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                overlay_illustrative_trend=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # --- Save the month-specific figures ---
+            fig_trajectories.savefig(
+                output_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_combined_month.savefig(
+                output_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_combined_month_median.savefig(
+                output_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_combined_month_illustrative.savefig(
+                output_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+
+            # Close month-specific figures to free memory
+            plt.close(fig_trajectories)
+            plt.close(fig_combined_month)
+            plt.close(fig_combined_month_median)
+            plt.close(fig_combined_month_illustrative)
+
+        monthly_central_trajectories_by_forecaster[forecaster_name] = central_trajs_by_month
+
+        # --------------------------------------------------------
+        # Plot comparison of central trajectories across months
+        # --------------------------------------------------------
+        if central_trajs_by_month:
+            central_list = sorted(central_trajs_by_month.items())  # list[(label, traj)]
+            fig_cent_compare = plot_central_trajectories_comparison(
+                central_list,
+                config,
+                overlay_external_data=True,
+            )
+
+            fig_cent_compare.savefig(
+                output_dir / f"central_trajectories_comparison_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+
+            plt.close(fig_cent_compare)
+        print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
     
-    
-    
-    return fig, all_forecaster_results
+    for sc_month_str in target_months:
+        fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
+            [(forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str]) for forecaster_name in monthly_central_trajectories_by_forecaster.keys()],
+            config,
+            overlay_external_data=True,
+            title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
+        )
+        fig_cent_forecaster_comparison_month.savefig(
+            output_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig_cent_forecaster_comparison_month)
+
+    return fig, all_forecaster_results, monthly_central_trajectories_by_forecaster
 
 # NEW TOP-LEVEL FUNCTIONS FOR FORECASTER INHERITANCE
 
