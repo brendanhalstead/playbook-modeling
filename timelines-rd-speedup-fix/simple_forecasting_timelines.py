@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
-from simple_forecasting_timelines_plotting_munged import *
+from simple_forecasting_timelines_plotting import *
 from collections import OrderedDict  # NEW IMPORT FOR TOPOLOGICAL SORT
 
 def load_config(config_path: str) -> dict:
@@ -595,6 +595,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     fig.savefig(output_dir / "simple_combined_headline.png", dpi=300, bbox_inches="tight")
 
     plt.close(fig)
+
+    monthly_central_trajectories_by_forecaster = {}
     for forecaster_name in all_forecaster_results.keys():
         # --- Figures that are independent of a specific SC month ---
         fig_backcasted_colored = plot_backcasted_trajectories(
@@ -619,6 +621,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             all_forecaster_samples,
             config,
             color_by_growth_type=True,
+            plot_median_curve=True,
             forecaster_filter=[forecaster_name],
         )
 
@@ -661,15 +664,15 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         # --- Figures filtered by specific SC arrival months ---
         target_months = [
             # March targets
-            "March 2027",
-            "March 2028",
-            "March 2029",
-            "March 2030",
-            # September targets
-            "September 2027",
-            "September 2028",
-            "September 2029",
-            "September 2030",
+            # "March 2027",
+            # "March 2028",
+            # "March 2029",
+            # "March 2030",
+            # # September targets
+            # "September 2027",
+            # "September 2028",
+            # "September 2029",
+            # "September 2030",
         ]
 
         # Collect central trajectories per month for later comparison
@@ -756,7 +759,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             plt.close(fig_combined_month_median)
             plt.close(fig_combined_month_illustrative)
 
-        print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
+        monthly_central_trajectories_by_forecaster[forecaster_name] = central_trajs_by_month
 
         # --------------------------------------------------------
         # Plot comparison of central trajectories across months
@@ -776,8 +779,23 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             )
 
             plt.close(fig_cent_compare)
+        print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
+    
+    for sc_month_str in target_months:
+        fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
+            [(forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str]) for forecaster_name in monthly_central_trajectories_by_forecaster.keys()],
+            config,
+            overlay_external_data=True,
+            title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
+        )
+        fig_cent_forecaster_comparison_month.savefig(
+            output_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig_cent_forecaster_comparison_month)
 
-    return fig, all_forecaster_results
+    return fig, all_forecaster_results, monthly_central_trajectories_by_forecaster
 
 # NEW TOP-LEVEL FUNCTIONS FOR FORECASTER INHERITANCE
 
