@@ -5,7 +5,7 @@ import yaml
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
-from simple_forecasting_timelines_plotting_munged import *
+from simple_forecasting_timelines_plotting import *
 from timelines_common import *
 
 
@@ -444,9 +444,9 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
         iteration_count = 0
         
         while progress < base_time_in_months[i] and time < max_time:
+
             # Calculate progress fraction
             progress_fraction = progress / base_time_in_months[i]
-            
             current_horizon_minutes = get_horizon_at_progress(horizon_mappings[i], progress)
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
@@ -467,26 +467,25 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             
             # Calculate research contribution on a yearly basis, then divide
             research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
-
             # Add to research stock
             new_research_stock = research_stock + research_contribution
-            
             # Calculate actual growth rate (annualized)
-            actual_growth = (new_research_stock / research_stock) ** (250/dt) - 1
+            # actual_growth = (new_research_stock / research_stock) ** (250/dt) - 1
+            actual_growth = new_research_stock / research_stock
 
             if progress == 0:
                 baseline_growth = actual_growth
                 baseline_growths.append(baseline_growth)
             
             # Calculate adjustment factor based on growth rate ratio
-            # Using log ratio to properly account for compound growth
-            growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
+            # current RS-doubling-rate / baseline RS-doubling-rate
+            # growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
+            growth_ratio = np.log(actual_growth) / np.log(baseline_growth)
             
             # Get compute rate for current time using compute schedule
             compute_rate = get_compute_rate(time, forecaster_config["compute_schedule"])
-            # Total rate is weighted average of software and compute rates
+            # Total rate is weighted average of growth_ratio and compute rates
             total_rate = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * compute_rate
-            
             # Update progress and time
             progress += dt_in_months * total_rate
             time += dt_in_months / 12  # Convert months to years
@@ -745,6 +744,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
             # Add to research stock
             new_research_stock = research_stock + research_contribution
+            # print(f"new_research_stock: {new_research_stock}")
             # Calculate actual growth rate (annualized)
             actual_growth = (new_research_stock / research_stock) ** (250/(dt)) - 1
             
@@ -771,7 +771,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
     return trajectories
                 
 
-def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[plt.Figure, dict]:
+def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tuple[plt.Figure, dict]:
     """Run simplified SC simulation and plot results."""
     print("Loading configuration...")
     config = load_config(config_path)
@@ -935,15 +935,15 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         # --- Figures filtered by specific SC arrival months ---
         target_months = [
             # March targets
-            "March 2027",
-            "March 2028",
-            "March 2029",
-            "March 2030",
+            "February 2029",
+            # "March 2028",
+            # "March 2029",
+            # "March 2030",
             # September targets
-            "September 2027",
-            "September 2028",
-            "September 2029",
-            "September 2030",
+            # "September 2027",
+            # "September 2028",
+            # "September 2029",
+            # "September 2030",
         ]
 
         # Collect central trajectories per month for later comparison
@@ -1054,5 +1054,5 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     return fig, all_forecaster_results
 
 if __name__ == "__main__":
-    run_simple_sc_simulation(config_path="../timelines_may_2025_update/simple_params.yaml")
+    run_simple_sc_simulation()
     print(f"\nSimulation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 
