@@ -538,34 +538,64 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
 
     plt.close(fig)
     for forecaster_name in all_forecaster_results.keys():
-        # Create and save trajectory plot
-        fig_trajectories = plot_march_2027_trajectories(all_forecaster_results, all_forecaster_trajectories, all_forecaster_samples, config, forecaster_filter=[forecaster_name])
-        
-        # Create and save backcasted trajectory plots - both versions
-        fig_backcasted_colored = plot_backcasted_trajectories(all_forecaster_backcast_trajectories, all_forecaster_samples, config, color_by_growth_type=True, forecaster_filter=[forecaster_name])
-        fig_backcasted_red = plot_backcasted_trajectories(all_forecaster_backcast_trajectories, all_forecaster_samples, config, color_by_growth_type=False, forecaster_filter=[forecaster_name])
-        
-        # Create and save combined trajectory plots
-        fig_combined_colored = plot_combined_trajectories(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, config, color_by_growth_type=True, forecaster_filter=[forecaster_name])
-        fig_combined_red = plot_combined_trajectories(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, config, color_by_growth_type=False, forecaster_filter=[forecaster_name])
-        
-        # Create and save combined trajectories for March 2027 SC arrivals only
-        fig_combined_march_2027 = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, forecaster_filter=[forecaster_name])
-        fig_combined_march_2027_median = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, plot_median_curve=True, forecaster_filter=[forecaster_name])
-        fig_combined_march_2027_illustrative = plot_combined_trajectories_march_2027(all_forecaster_backcast_trajectories, all_forecaster_trajectories, all_forecaster_samples, all_forecaster_results, config, color_by_growth_type=True, overlay_illustrative_trend=True, forecaster_filter=[forecaster_name])
-        
-        print(f"\nSaving trajectory plots for {forecaster_name}...")
-        # Save plots
-        fig_trajectories.savefig(output_dir / f"march_2027_trajectories_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_backcasted_colored.savefig(output_dir / f"backcasted_trajectories_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_backcasted_red.savefig(output_dir / f"backcasted_trajectories_red_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_combined_colored.savefig(output_dir / f"combined_trajectories_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_combined_red.savefig(output_dir / f"combined_trajectories_red_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_combined_march_2027.savefig(output_dir / f"combined_trajectories_march_2027_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_combined_march_2027_median.savefig(output_dir / f"combined_trajectories_march_2027_median_{forecaster_name}.png", dpi=300, bbox_inches="tight")
-        fig_combined_march_2027_illustrative.savefig(output_dir / f"combined_trajectories_march_2027_illustrative_{forecaster_name}.png", dpi=300, bbox_inches="tight")
+        # --- Figures that are independent of a specific SC month ---
+        fig_backcasted_colored = plot_backcasted_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=True,
+            forecaster_filter=[forecaster_name],
+        )
 
-        plt.close(fig_trajectories)
+        fig_backcasted_red = plot_backcasted_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=False,
+            forecaster_filter=[forecaster_name],
+        )
+
+        fig_combined_colored = plot_combined_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=True,
+            plot_median_curve=True,
+            forecaster_filter=[forecaster_name],
+        )
+
+        fig_combined_red = plot_combined_trajectories(
+            all_forecaster_backcast_trajectories,
+            all_forecaster_trajectories,
+            all_forecaster_samples,
+            config,
+            color_by_growth_type=False,
+            forecaster_filter=[forecaster_name],
+        )
+
+        # Save and close the month-independent figures
+        fig_backcasted_colored.savefig(
+            output_dir / f"backcasted_trajectories_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig_backcasted_red.savefig(
+            output_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig_combined_colored.savefig(
+            output_dir / f"combined_trajectories_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        fig_combined_red.savefig(
+            output_dir / f"combined_trajectories_red_{forecaster_name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
         plt.close(fig_backcasted_colored)
         plt.close(fig_backcasted_red)
         plt.close(fig_combined_colored)

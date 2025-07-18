@@ -158,11 +158,13 @@ def calculate_base_time(samples: dict, current_horizon: float) -> tuple[np.ndarr
     sub_mask = samples["is_subexponential"]
     
     n_sims = len(n_doublings)
+    
     total_time = np.zeros(n_sims)
     horizon_mappings = []  # List of time-to-horizon mappings for each simulation
     
     # Use 1 month resolution for efficiency
     dt_mapping = 1.0
+    
     
     # Vectorized calculation of base growth time (before cost_speed)
     growth_time = np.zeros(n_sims)
