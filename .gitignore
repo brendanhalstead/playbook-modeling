@@ -1,5 +1,8 @@
 debug_log
 
+# Image files
+*.png
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
