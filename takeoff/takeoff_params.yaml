@@ -52,10 +52,24 @@ speedup_correlation_matrix:
 # Limitation: We also assume that the software progress rate doesn't change over time, which likely isn't true e.g. the dynamics change as AI R&D gets more automated.
 # Format: [p_zero, lower_bound, upper_bound, ceiling] for 80% confidence interval of lognormal distribution
 projects:
-  # "Leading Project (if full speed)":
-  #   initial_software_months_behind: [1, 0, 0, 0]
-  #   initial_hardware_multiple: [0, 1, 1, 1]
-  #   software_progress_rate: [0, 1, 1, 1]
+  "Leading Project (if full speed)":
+    initial_software_months_behind: [1, 0, 0, 0]
+    initial_hardware_multiple: [0, 1, 1, 1]
+    software_progress_rate: [0, 1, 1, 1]
+    schedule_params:
+      type: "compute_and_talent"
+      project_name: "Leading Project (if full speed)"
+      reference_exp_H100e: 10000000
+      initial_sw_progress_rate: 1
+      start_date: "March 31 2027"
+      experiment_H100e: 10000000
+      agent_H100be: 1000000
+      scientist_talent_ratio: 1 # factor by which the project's scientist talent pool is worse than OpenBrain's
+      SC_CES_params:
+        scale_F: 1.7
+        share_sci_to_eng_alpha: 0.06
+        substitution_sci_eng_rho: -1.43
+        share_compute_labor_beta: 0.3
   # "20x less hardware, uncertainty about rest": 
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.2, 0.2, 0.2]
@@ -64,19 +78,29 @@ projects:
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.01, 0.01, 0.01]
   #   software_progress_rate: [0, 0.0025, 0.15, 1]
-  "Russia (slowed by decay 5000d)": 
-    initial_software_months_behind: [0, 1, 18, 24]
-    # initial_software_months_behind: [1, 0, 0, 0]
+  "Russia": 
+    # initial_software_months_behind: [0, 1, 18, 24]
+    initial_software_months_behind: [1, 0, 0, 0]
     initial_hardware_multiple: [0, 0.01, 0.2, 0.4]
     software_progress_rate: [0, 0.04, 0.5, 1] # constant over time in each sample
     schedule_params:
-      type: "decay"
+      type: "compute_and_talent"
+      project_name: "Russia"
+      reference_exp_H100e: 10000000
+      initial_sw_progress_rate: 1
       start_date: "March 31 2027"
-      eta_days: 5000
+      experiment_H100e: 10000
+      agent_H100be: 10000
+      scientist_talent_ratio: [0.05,0.5] # factor by which the project's scientist talent pool is worse than OpenBrain's
+      SC_CES_params:
+        scale_F: 1.7
+        share_sci_to_eng_alpha: 0.06
+        substitution_sci_eng_rho: -1.43
+        share_compute_labor_beta: 0.3
     no_resupply: true
     failure_model: default_weibull
   # "Open Source Collective (not closely considered)":
-  #   initial_software_months_behind: [0, 1, 18, 24]
+  #   initial_software_monthchrs_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.002, 0.05, 0.4]
   #   software_progress_rate: [0, 0.02, 0.3, 1]
 

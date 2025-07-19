@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 5000     # Number of Monte Carlo simulation runs, set to 5000 for full run
+  n_sims: 2000     # Number of Monte Carlo simulation runs, set to 5000 for full run
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
@@ -65,11 +65,8 @@ forecasters:
       - [2029, 0.2]
       - [2030, 0.15]
       - [2031, 0.1]
-      - [2032, 0.05]
-      - [2033, 0.025] 
-      - [2034, 0.0125]  # List of [year, rate] pairs for annual labor growth
     initial_software_progress_share_ci: [0.2, 0.85]  # 80% CI for initial software progress share
-    patch_rd_speedup: True
+    patch_rd_speedup: False
     distributions:
       h_SC_ci: [1, 14400]  # Months needed for SC
       horizon_doubling_time_ci: [2.5, 9]   # Horizon doubling time in months
