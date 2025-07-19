@@ -1,4 +1,5 @@
 debug_log
+output/
 
 # Image files
 *.png

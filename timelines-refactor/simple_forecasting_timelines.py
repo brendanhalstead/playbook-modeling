@@ -527,9 +527,14 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             
             pbar.update(1)
     
-    # Create output directory if it doesn't exist
-    output_dir = Path("figures")
+    # Create output directory with current date and time
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = Path("output") / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save config to output directory
+    with open(output_dir / "config.yaml", "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     
     print("\nGenerating plots...")
     # Create and save original plot
