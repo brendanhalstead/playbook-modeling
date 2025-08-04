@@ -1,0 +1,53 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Timelines Plotting Helpers
+
+This repository provides *generic* plotting utilities for forecasting timelines, located in
+[simple_forecasting_timelines_plotting.py](mdc:timelines-rd-speedup-fix/simple_forecasting_timelines_plotting.py).
+
+Key public functions:
+1. `plot_trajectories_sc_month(...)`
+2. `plot_combined_trajectories_sc_month(...)`
+
+## Import
+```python
+from timelines_rd_speedup_fix.simple_forecasting_timelines_plotting import (
+    plot_trajectories_sc_month,
+    plot_combined_trajectories_sc_month,
+)
+```
+
+## Usage examples
+```python
+fig = plot_trajectories_sc_month(
+    all_forecaster_results,
+    all_forecaster_trajectories,
+    all_forecaster_samples,
+    config,
+    sc_month_str="April 2028",  # any "Month YYYY" string
+)
+fig.savefig("figures/trajectories_april_2028.png")
+```
+
+```python
+fig, central_traj = plot_combined_trajectories_sc_month(
+    all_backcast_trajectories,
+    all_forecast_trajectories,
+    all_samples,
+    all_results,
+    config,
+    sc_month_str="December 2026",
+    color_by_growth_type=True,
+    overlay_external_data=True,
+)
+```
+
+Notes:
+* `sc_month_str` must be a valid month-year string (case-insensitive).
+* `plot_combined_trajectories_sc_month` returns **(fig, central_traj)**.  `central_traj` is either `None` or a dict with keys `"times"` and `"horizons"`.
+* Legacy wrappers (`plot_march_2027_trajectories`, `plot_combined_trajectories_march_2027`) call the new helpers with `sc_month_str="March 2027"` for backward compatibility.
+
+Use these helpers for any new visualisations instead of the old, hard-coded March-2027 versions.
