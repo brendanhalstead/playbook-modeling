@@ -50,7 +50,7 @@ def get_lognorm_params_two_percentiles(p10_val, p90_val):
     return mu, sigma
 
 
-def find_min_implementation_time_budget(ideas_pool, impl_time_budget_range, runtime_budget, compute_budget, target_improvement, base_time_budget):
+def find_min_implementation_time_budget(ideas_pool, impl_time_budget_range, runtime_budget, compute_budget, target_improvement, base_time_budget, verbose=False):
     """
     Helper function to find minimum implementation time budget needed to achieve target improvement.
     """
@@ -65,7 +65,7 @@ def find_min_implementation_time_budget(ideas_pool, impl_time_budget_range, runt
         log_mid_budget = (log_min_budget + log_max_budget) / 2
         mid_budget = np.exp(log_mid_budget)
         
-        result = solve_greedy_knapsack(ideas_pool, mid_budget, runtime_budget, compute_budget)
+        result = solve_greedy_knapsack(ideas_pool, mid_budget, runtime_budget, compute_budget, verbose=verbose)
         achieved_improvement = result['total_improvement']
         
         if iteration < 3:  # Show first few iterations for debugging
@@ -220,7 +220,10 @@ def solve_greedy_knapsack(experiments_df, implementation_time_budget, runtime_bu
             current_impl_time_used += impl_time_needed
             current_runtime_used += runtime_needed
             current_compute_used += compute_needed
-    
+            if verbose:
+                print(f"Selected experiment {index} with efficiency {row['efficiency']:.2f}. current impl_time_used: {current_impl_time_used:.2f}, current runtime_used: {current_runtime_used:.2f}, current compute_used: {current_compute_used:.2f}")
+                import pdb; pdb.set_trace()
+
     if not selected_indices:
         return {'total_improvement': 1.0, 'log10_improvement': 0.0, 'num_experiments': 0, 
                 'impl_time_used': 0.0, 'runtime_used': 0.0, 'compute_used': 0.0}
@@ -238,46 +241,8 @@ def solve_greedy_knapsack(experiments_df, implementation_time_budget, runtime_bu
     }
 
 
-def find_min_time_budget_binary_search(experiments_df, compute_budget, target_improvement, scenario_type="default", baseline_time_budget=2.0):
-    """
-    Binary search to find minimum time budget to achieve target improvement.
-    Searches between baseline_time_budget/100 and baseline_time_budget.
-    """
-    min_budget = baseline_time_budget / 100.0  # 1% of baseline
-    max_budget = baseline_time_budget          # 100% of baseline
-    tolerance = 0.02  # 2% tolerance to distinguish between small differences
-
-    # Work in log space for binary search
-    log_min_budget = np.log(min_budget)
-    log_max_budget = np.log(max_budget)
-
-    # Modify experiments based on scenario
-    df_modified = experiments_df.copy()
-    if scenario_type == "instant_time":
-        df_modified['implementation_time'] = 1e-9
-    elif scenario_type == "infinite_compute":
-        compute_budget = 1e6  # Effectively infinite
-        df_modified['runtime'] = 0.0  # Also set runtime to 0
-
-    for _ in range(20):  # Max 20 iterations for binary search
-        log_mid_budget = (log_min_budget + log_max_budget) / 2
-        mid_budget = np.exp(log_mid_budget)
-
-        result = solve_greedy_knapsack(df_modified, mid_budget, mid_budget, compute_budget)
-        achieved_improvement = result['total_improvement']
-
-        if achieved_improvement >= target_improvement:
-            log_max_budget = log_mid_budget
-        else:
-            log_min_budget = log_mid_budget
-
-        if (np.exp(log_max_budget) - np.exp(log_min_budget)) / np.exp(log_max_budget) < tolerance:
-            break
-    
-    return np.exp(log_max_budget)
-
-
 # --- Data Generation Helpers ---
+
 def generate_lognormal_data(mu, sigma, n_samples):
     """Generates standard independent lognormal data."""
     software_improvement = np.random.lognormal(mu, sigma, n_samples) + 1.0  # Ensure all improvements >= 1
@@ -361,8 +326,17 @@ def generate_correlated_lognormal_data(mu, sigma, n_samples, corr_matrix):
     })
 
 
+# Small helper for diagnostics
+def debug_print_usage(label, result, impl_budget, runtime_budget, compute_budget):
+    print(
+        f"      [{label}] impl_time_used {result['impl_time_used']:.3f}/{impl_budget:.3f}, "
+        f"runtime_used {result['runtime_used']:.3f}/{runtime_budget:.3f}, "
+        f"compute_used {result['compute_used']:.3f}/{compute_budget:.3f}"
+    )
+
+
 # --- Main Simulation Loop ---
-experiment_configs = [(5000, 10)] # , (50000, 2)]  # Commented out 50k experiment pools
+experiment_configs = [(5000, 1)] # , (50000, 2)]  # Commented out 50k experiment pools
 all_trials_data = []
 
 # Get parameters from the original script logic
@@ -433,9 +407,17 @@ for n_experiments, n_trials in experiment_configs:
                 baseline_result = solve_greedy_knapsack(ideas_pool, base_time_budget, base_time_budget, base_compute_budget)
                 baseline_improvement = baseline_result['total_improvement']
                 print(f"      -> Finished in {time.time() - start_time:.2f}s, improvement: {baseline_improvement:.2e}")
+                debug_print_usage(
+                    label="baseline",
+                    result=baseline_result,
+                    impl_budget=base_time_budget,
+                    runtime_budget=base_time_budget,
+                    compute_budget=base_compute_budget,
+                )
                 
                 # Step 2: Test various compute multipliers
-                compute_multipliers = [0.1, 1.0, 10, 100, 1e6]  # Added infinite compute as reference
+                # compute_multipliers = [0.1, 1.0, 10, 100, 1e6]  # Added infinite compute as reference
+                compute_multipliers = []
                 
                 for compute_mult in tqdm(compute_multipliers, desc=f"Compute Multipliers for {taste_name}"):
                     print(f"    Finding min time budget for {compute_mult}x compute...")
@@ -478,7 +460,8 @@ for n_experiments, n_trials in experiment_configs:
                     })
                 
                 # Step 3: Test various implementation time multipliers (speed improvements)
-                impl_speed_multipliers = [0.01, 1.0, 100]  # Simplified for debugging
+                # impl_speed_multipliers = [0.1, 1.0, 100]  # Simplified for debugging
+                impl_speed_multipliers = [100]  # Simplified for debugging
                 
                 for impl_speed in tqdm(impl_speed_multipliers, desc=f"Implementation Time Multipliers for {taste_name}"):
                     print(f"    Finding min time budget for {impl_speed}x implementation speed...")
@@ -498,19 +481,31 @@ for n_experiments, n_trials in experiment_configs:
                     print(f"      -> Target improvement: {baseline_improvement:.2e}")
                     
                     # Determine binary search range based on implementation time multiplier
-                    if impl_speed < 1:  # Faster implementation (smaller multiplier)
+                    if impl_speed > 1:  # Faster implementation (smaller multiplier)
                         impl_time_budget_range = (base_time_budget / 100.0, base_time_budget)
                     else:  # Slower implementation (larger multiplier)
                         impl_time_budget_range = (base_time_budget, base_time_budget * 100)
                     
                     min_time_impl = find_min_implementation_time_budget(
                         modified_ideas_pool, impl_time_budget_range, base_time_budget, 
-                        base_compute_budget, baseline_improvement, base_time_budget
+                        base_compute_budget, baseline_improvement, base_time_budget, verbose=False
                     )
                     
                     speedup_impl = base_time_budget / min_time_impl
                     print(f"      -> Finished in {time.time() - start_time:.2f}s, speedup: {speedup_impl:.2f}x")
                     print(f"      -> Baseline budget: {base_time_budget}, Min budget needed: {min_time_impl:.4f}")
+                    
+                    # Diagnostics at the found min budget
+                    final_result_impl = solve_greedy_knapsack(
+                        modified_ideas_pool, min_time_impl, base_time_budget, base_compute_budget
+                    )
+                    debug_print_usage(
+                        label=f"impl_speed={impl_speed}x@min_budget",
+                        result=final_result_impl,
+                        impl_budget=min_time_impl,
+                        runtime_budget=base_time_budget,
+                        compute_budget=base_compute_budget,
+                    )
                     
                     all_trials_data.append({
                         'n_experiments': n_experiments,
@@ -604,7 +599,7 @@ for n_experiments, n_trials in experiment_configs:
             #         'min_time_budget_100_percent_taste': min_time_budget_100_taste,
             #         'num_experiments_100_percent_taste': final_result_100['num_experiments'],
             #         'taste_speedup': taste_speedup,
-            #         'log10_taste_speedup': np.log10(taste_speedup) if taste_speedup > 0 and taste_speedup != np.inf else np.inf
+            #         'log10_taste_speedup': np.log10(taste_speedup) if taste_speedup > 0 and tasteup != np.inf else np.inf
             #     })
 
 
@@ -618,7 +613,7 @@ grouped_summary = results_df.groupby(['n_experiments', 'setting', 'taste_level',
 print(grouped_summary)
 
 # CSV Output
-output_dir = 'outputs'
+output_dir = os.path.join(os.path.dirname(__file__), 'outputs')
 os.makedirs(output_dir, exist_ok=True)
 output_path = os.path.join(output_dir, 'multiplier_speedup_analysis_summary.csv')
 grouped_summary.to_csv(output_path)
