@@ -1,9 +1,32 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 import numpy as np
+import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from scipy.optimize import curve_fit
+
+def plain_number_formatter(x, pos):
+    """Format numbers without scientific notation for log scale axes."""
+    if x >= 1:
+        if x == int(x):
+            return f'{int(x)}'
+        elif x < 10:
+            print(f'test {x:.2f}')
+            return f'{x:.2f}'
+        else:
+            return f'{x:.1f}'
+    elif x >= 0.1:
+        return f'{x:.2f}'
+    elif x >= 0.01:
+        return f'{x:.3f}'
+    else:
+        return f'{x:.4f}'
+
+# Output directory for saving figures
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'outputs', 'interpolation_plots')
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def create_interpolation_model():
     """Create interpolation model based on Claude 3.7 Sonnet baseline"""
@@ -380,17 +403,17 @@ def load_and_plot_aird_estimates():
     backcast_dates = [d for d in interpolation_dates if d < baseline_date]
     backcast_progress_multipliers = [interpolation_progress_multipliers[i] for i, d in enumerate(interpolation_dates) if d < baseline_date]
     
-    # Filter actual data to include backcast + Claude 3.7 Sonnet baseline point
+    # Filter Our Blinded Estimates to include backcast + Claude 3.7 Sonnet baseline point
     backcast_actual_dates = [d for d in parsed_dates if d is not None and d <= baseline_date]
     backcast_actual_progress = [progress_multiplier.iloc[i] for i, d in enumerate(parsed_dates) if d is not None and d <= baseline_date]
     backcast_actual_models = [model_names.iloc[i] for i, d in enumerate(parsed_dates) if d is not None and d <= baseline_date]
     
     # Plot backcast data
-    ax.scatter(backcast_actual_dates, backcast_actual_progress, s=100, alpha=0.7, color='red', label='Actual Data')
+    ax.scatter(backcast_actual_dates, backcast_actual_progress, s=100, alpha=0.7, color='red', label='Our Blinded Estimates')
     
     # Add backcast interpolation curve
     ax.plot(backcast_dates, backcast_progress_multipliers, 
-             color='green', linewidth=2, alpha=0.8, label='Claude 3.7 Baseline Backcast Model')
+             color='green', linewidth=2, alpha=0.8, label='Claude 3.7 Backcast (intended interpolation method)')
     
     # Add vertical line at Claude 3.7 Sonnet baseline
     ax.axvline(x=baseline_date, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet Baseline')
@@ -400,12 +423,17 @@ def load_and_plot_aird_estimates():
         ax.annotate(model, (backcast_actual_dates[i], backcast_actual_progress[i]), 
                     xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
     
-    # Connect actual data points with lines to show progression
+    # Connect Our Blinded Estimates points with lines to show progression
     ax.plot(backcast_actual_dates, backcast_actual_progress, alpha=0.5, color='gray', linestyle='--')
     
-    # Set log scale for y-axis
+    # Set log scale for y-axis with plain number formatting
     ax.set_yscale('log')
-    
+    from matplotlib.ticker import FixedLocator
+    # Manually set tick locations for the narrow range ~1.0 to ~1.1
+    tick_values = [1.0, 1.02, 1.04, 1.06, 1.08, 1.1]
+    ax.yaxis.set_major_locator(FixedLocator(tick_values))
+    ax.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+
     # Customize plot
     ax.set_xlabel('Date', fontsize=12)
     ax.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
@@ -419,10 +447,11 @@ def load_and_plot_aird_estimates():
     
     # Make layout tight
     plt.tight_layout()
-    
-    # Show the plot
-    plt.show()
-    
+
+    # Save the plot
+    plt.savefig(os.path.join(OUTPUT_DIR, 'backcast_interpolation.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
     # Print some basic statistics
     print("\nBasic Statistics:")
     print(f"Number of models: {len(df)}")
@@ -459,17 +488,18 @@ def load_and_plot_aird_estimates():
     if gpt3_interpolate_fn is not None:
         # Calculate months from GPT-3 for key dates
         claude_37_date = datetime(2025, 2, 1)
-        target_date = claude_37_date + relativedelta(months=60)
-        
+        apr_2025_ref = datetime(2025, 4, 1)
+        target_date = apr_2025_ref + relativedelta(months=60)  # 60 2024-months after Apr 2025
+
         gpt3_to_claude37_months = (claude_37_date.year - gpt3_date.year) * 12 + (claude_37_date.month - gpt3_date.month)
         gpt3_to_target_months = (target_date.year - gpt3_date.year) * 12 + (target_date.month - gpt3_date.month)
-        
-        # Calculate predicted value at 60 months after Claude 3.7 Sonnet
+
+        # Calculate predicted value at 60 2024-months after Apr 2025
         predicted_60m_value = gpt3_interpolate_fn(gpt3_to_target_months)
-        
-        print(f"Predicted value at 60 months after Claude 3.7 Sonnet: {predicted_60m_value:.6f}")
-        
-        # Create interpolation data from GPT-3 to 60 months after Claude 3.7 Sonnet
+
+        print(f"Predicted value at 60 2024-months after Apr 2025: {predicted_60m_value:.6f}")
+
+        # Create interpolation data from GPT-3 to 60 2024-months after Apr 2025
         end_date = target_date
         
         # Create monthly date range
@@ -489,61 +519,79 @@ def load_and_plot_aird_estimates():
         # Create first window for full timeline forecast
         fig_gpt3_forecast = plt.figure(figsize=(12, 8))
         ax1 = fig_gpt3_forecast.add_subplot(111)
-        
-        # First plot: Full timeline with forecast
-        ax1.scatter(parsed_dates, progress_multiplier, s=100, alpha=0.7, color='red', label='Actual Data')
-        
+
+        # Reference date for x-axis: April 2025 = 0
+        apr_2025 = datetime(2025, 4, 1)
+
+        # Helper function to convert date to months from Apr 2025
+        def date_to_months_from_apr2025(d):
+            return (d.year - apr_2025.year) * 12 + (d.month - apr_2025.month)
+
+        # Convert dates to months from Apr 2025
+        parsed_months = [date_to_months_from_apr2025(d) if d is not None else None for d in parsed_dates]
+        interp_months = [date_to_months_from_apr2025(d) for d in gpt3_interpolation_dates]
+
+        # Filter out None values for scatter plot
+        valid_months = [m for m in parsed_months if m is not None]
+        valid_progress = [progress_multiplier.iloc[i] for i, m in enumerate(parsed_months) if m is not None]
+
+        # First plot: Full timeline with forecast (x-axis in months from Apr 2025)
+        ax1.scatter(valid_months, valid_progress, s=100, alpha=0.7, color='red', label='Our Blinded Estimates')
+
         # Add interpolation curve
-        ax1.plot(gpt3_interpolation_dates, gpt3_interpolation_progress_multipliers, 
+        ax1.plot(interp_months, gpt3_interpolation_progress_multipliers,
                  color='green', linewidth=2, alpha=0.8, label='GPT-3 to Claude 3.7 Interpolation')
-        
-        # Add vertical lines for key dates
-        ax1.axvline(x=gpt3_date, color='blue', linestyle=':', alpha=0.7, label='GPT-3 (Jun 2020)')
-        ax1.axvline(x=claude_37_date, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet (Feb 2025)')
-        ax1.axvline(x=target_date, color='orange', linestyle=':', alpha=0.7, label='60 months after Claude 3.7 Sonnet')
-        
+
+        # Add vertical lines for key dates (converted to months)
+        gpt3_months = date_to_months_from_apr2025(gpt3_date)
+        claude_37_months = date_to_months_from_apr2025(claude_37_date)
+        target_months = date_to_months_from_apr2025(target_date)
+
+        ax1.axvline(x=gpt3_months, color='blue', linestyle=':', alpha=0.7, label='GPT-3 (Jun 2020)')
+        ax1.axvline(x=claude_37_months, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet (Feb 2025)')
+        ax1.axvline(x=target_months, color='orange', linestyle=':', alpha=0.7, label='60 2024-months (Apr 2030)')
+
         # Add horizontal line at predicted value
         ax1.axhline(y=predicted_60m_value, color='orange', linestyle='--', alpha=0.5)
-        
+
         # Add horizontal line at 8.5 (median SC progress multiplier)
         ax1.axhline(y=8.5, color='red', linestyle='-', alpha=0.7, linewidth=2)
-        
-        # Add text showing predicted value
-        ax1.text(target_date, predicted_60m_value, f'  {predicted_60m_value:.3f}', 
-                verticalalignment='center', fontsize=12, color='orange', fontweight='bold')
-        
-        # Add text showing 8.5 median SC progress multiplier
-        ax1.text(target_date, 8.5, '  8.5 (median SC)', 
-                verticalalignment='center', fontsize=12, color='red', fontweight='bold')
-        
+
+        # Add text showing predicted value (positioned slightly above the line)
+        ax1.text(target_months, predicted_60m_value * 1.04, f'  {predicted_60m_value:.3f}',
+                verticalalignment='bottom', fontsize=12, color='orange', fontweight='bold')
+
+        # Add text showing 8.5 median SC progress multiplier (positioned slightly above the line)
+        ax1.text(target_months, 8.5 * 1.04, '  8.5 (median SC)',
+                verticalalignment='bottom', fontsize=12, color='red', fontweight='bold')
+
         # Add model names as labels
         for i, model in enumerate(model_names):
-            if parsed_dates[i] is not None:
-                ax1.annotate(model, (parsed_dates[i], progress_multiplier.iloc[i]), 
+            if parsed_months[i] is not None:
+                ax1.annotate(model, (parsed_months[i], progress_multiplier.iloc[i]),
                            xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
-        
-        # Connect actual data points with lines
-        ax1.plot(parsed_dates, progress_multiplier, alpha=0.5, color='gray', linestyle='--')
-        
-        # Set log scale for y-axis
+
+        # Connect Our Blinded Estimates points with lines
+        ax1.plot(valid_months, valid_progress, alpha=0.5, color='gray', linestyle='--')
+
+        # Set log scale for y-axis with plain number formatting
         ax1.set_yscale('log')
-        
+        ax1.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+
         # Customize first plot
-        ax1.set_xlabel('Date', fontsize=12)
+        ax1.set_xlabel('2024-months (Apr 2025 = 0)', fontsize=12)
         ax1.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
         ax1.set_title('SC progress multiplier forecast from GPT-3 to Claude 3.7 interpolation', fontsize=14)
         ax1.grid(True, alpha=0.3)
         ax1.legend()
-        
-        # Rotate x-axis labels for better readability
-        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
-        
+
         # Make layout tight
         plt.tight_layout()
-        
-        # Show the first plot
-        plt.show()
-        
+
+        # Save the first plot
+        plt.savefig(os.path.join(OUTPUT_DIR, 'gpt3_to_claude37_forecast.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+
         # Create second window for recent focus (no forecast)
         fig_gpt3_recent = plt.figure(figsize=(12, 8))
         ax2 = fig_gpt3_recent.add_subplot(111)
@@ -566,7 +614,7 @@ def load_and_plot_aird_estimates():
         
         # Plot recent data
         ax2.scatter(recent_actual_dates, recent_actual_progress, s=100, alpha=0.7, color='red', 
-                   label='Actual Data', zorder=5)
+                   label='Our Blinded Estimates', zorder=5)
         
         # Add interpolation curve for recent period
         ax2.plot(recent_interp_dates, recent_interp_progress, 
@@ -581,12 +629,17 @@ def load_and_plot_aird_estimates():
             ax2.annotate(model, (recent_actual_dates[i], recent_actual_progress[i]), 
                        xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
         
-        # Connect actual data points with lines
+        # Connect Our Blinded Estimates points with lines
         ax2.plot(recent_actual_dates, recent_actual_progress, alpha=0.5, color='gray', linestyle='--')
-        
-        # Set log scale for y-axis
+
+        # Set log scale for y-axis with plain number formatting
         ax2.set_yscale('log')
-        
+        from matplotlib.ticker import FixedLocator
+        # Manually set tick locations for the narrow range ~1.0 to ~1.1
+        tick_values = [1.0, 1.02, 1.04, 1.06, 1.08, 1.1]
+        ax2.yaxis.set_major_locator(FixedLocator(tick_values))
+        ax2.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+
         # Customize second plot
         ax2.set_xlabel('Date', fontsize=12)
         ax2.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
@@ -596,191 +649,196 @@ def load_and_plot_aird_estimates():
         
         # Rotate x-axis labels for better readability
         plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
-        
+
         # Make layout tight
         plt.tight_layout()
-        
-        # Show the second plot
-        plt.show()
-        
+
+        # Save the second plot
+        plt.savefig(os.path.join(OUTPUT_DIR, 'gpt3_to_claude37_recent.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+
     else:
         print("GPT-3 to Claude 3.7 Sonnet interpolation failed - skipping plot")
-    
-    # Add the two new "benchmarks and gaps" plots
-    print("\n" + "="*50)
-    print("BENCHMARKS AND GAPS ANALYSIS")
-    print("="*50)
-    
-    # Calculate end of 2026 date
-    end_of_2026 = datetime(2026, 12, 31)
-    
-    # Graph (a): GPT-3 to Claude 3.7 interpolation with end of 2026 marker
-    if gpt3_interpolate_fn is not None:
-        # Calculate months from GPT-3 to end of 2026
-        gpt3_to_end2026_months = (end_of_2026.year - gpt3_date.year) * 12 + (end_of_2026.month - gpt3_date.month)
-        end2026_value_gpt3 = gpt3_interpolate_fn(gpt3_to_end2026_months)
-        
-        print(f"GPT-3 to Claude 3.7 interpolation value at end of 2026: {end2026_value_gpt3:.6f}")
-        
-        # For benchmarks and gaps, use 70 months target
-        bg_target_date = claude_37_date + relativedelta(months=70)
-        gpt3_to_bg_target_months = (bg_target_date.year - gpt3_date.year) * 12 + (bg_target_date.month - gpt3_date.month)
-        predicted_70m_value_bg = gpt3_interpolate_fn(gpt3_to_bg_target_months)
-        
-        # Create extended interpolation data for benchmarks and gaps (70 months)
-        bg_end_date = bg_target_date
-        bg_interpolation_dates = []
-        current_date = gpt3_date
-        while current_date <= bg_end_date:
-            bg_interpolation_dates.append(current_date)
-            current_date += relativedelta(months=1)
-        
-        bg_interpolation_progress_multipliers = []
-        for date in bg_interpolation_dates:
-            months_from_gpt3 = (date.year - gpt3_date.year) * 12 + (date.month - gpt3_date.month)
-            interp_progress_mult = gpt3_interpolate_fn(months_from_gpt3)
-            bg_interpolation_progress_multipliers.append(interp_progress_mult)
-        
-        # Create figure for GPT-3 interpolation benchmarks and gaps
-        fig_gpt3_bg = plt.figure(figsize=(12, 8))
-        ax_gpt3_bg = fig_gpt3_bg.add_subplot(111)
-        
-        # Plot actual data
-        ax_gpt3_bg.scatter(parsed_dates, progress_multiplier, s=100, alpha=0.7, color='red', label='Actual Data')
-        
-        # Add interpolation curve (extended to 70 months)
-        ax_gpt3_bg.plot(bg_interpolation_dates, bg_interpolation_progress_multipliers, 
-                        color='green', linewidth=2, alpha=0.8, label='GPT-3 to Claude 3.7 Interpolation')
-        
-        # Add vertical lines for key dates
-        ax_gpt3_bg.axvline(x=gpt3_date, color='blue', linestyle=':', alpha=0.7, label='GPT-3 (Jun 2020)')
-        ax_gpt3_bg.axvline(x=claude_37_date, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet (Feb 2025)')
-        ax_gpt3_bg.axvline(x=end_of_2026, color='cyan', linestyle=':', alpha=0.7, label='End of 2026')
-        ax_gpt3_bg.axvline(x=bg_target_date, color='orange', linestyle=':', alpha=0.7, label='70 months after Claude 3.7 Sonnet')
-        
-        # Add horizontal lines
-        ax_gpt3_bg.axhline(y=predicted_70m_value_bg, color='orange', linestyle='--', alpha=0.5)
-        ax_gpt3_bg.axhline(y=8.5, color='red', linestyle='-', alpha=0.7, linewidth=2)
-        ax_gpt3_bg.axhline(y=end2026_value_gpt3, color='cyan', linestyle='-', alpha=0.7, linewidth=2)
-        
-        # Add text annotations
-        ax_gpt3_bg.text(bg_target_date, predicted_70m_value_bg, f'  {predicted_70m_value_bg:.3f}', 
-                       verticalalignment='center', fontsize=12, color='orange', fontweight='bold')
-        ax_gpt3_bg.text(bg_target_date, 8.5, '  8.5 (median SC)', 
-                       verticalalignment='center', fontsize=12, color='red', fontweight='bold')
-        ax_gpt3_bg.text(end_of_2026, end2026_value_gpt3, f'  {end2026_value_gpt3:.3f}', 
-                       verticalalignment='center', fontsize=12, color='cyan', fontweight='bold')
-        
-        # Add model names as labels
-        for i, model in enumerate(model_names):
-            if parsed_dates[i] is not None:
-                ax_gpt3_bg.annotate(model, (parsed_dates[i], progress_multiplier.iloc[i]), 
-                                   xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
-        
-        # Connect actual data points with lines
-        ax_gpt3_bg.plot(parsed_dates, progress_multiplier, alpha=0.5, color='gray', linestyle='--')
-        
-        # Set log scale for y-axis
-        ax_gpt3_bg.set_yscale('log')
-        
-        # Customize plot
-        ax_gpt3_bg.set_xlabel('Date', fontsize=12)
-        ax_gpt3_bg.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
-        ax_gpt3_bg.set_title('GPT-3 to Claude 3.7 interpolation benchmarks and gaps', fontsize=14)
-        ax_gpt3_bg.grid(True, alpha=0.3)
-        ax_gpt3_bg.legend()
-        
-        # Rotate x-axis labels for better readability
-        plt.setp(ax_gpt3_bg.xaxis.get_majorticklabels(), rotation=45)
-        
-        # Make layout tight
-        plt.tight_layout()
-        
-        # Show the plot
-        plt.show()
-    
-    # Graph (b): Claude 3.7 baseline interpolation with end of 2026 marker
-    # Calculate months from Claude 3.7 baseline to end of 2026
-    baseline_to_end2026_months = (end_of_2026.year - baseline_date.year) * 12 + (end_of_2026.month - baseline_date.month)
-    end2026_value_baseline = interpolate_fn(baseline_to_end2026_months)
-    
-    print(f"Claude 3.7 baseline interpolation value at end of 2026: {end2026_value_baseline:.6f}")
-    
-    # For benchmarks and gaps, create a special interpolation for 70 months
-    # This uses the same monthly multiplier but extends to 70 months
-    bg_baseline_target_date = baseline_date + relativedelta(months=70)
-    
-    # Create figure for Claude 3.7 baseline benchmarks and gaps
-    fig_baseline_bg = plt.figure(figsize=(12, 8))
-    ax_baseline_bg = fig_baseline_bg.add_subplot(111)
-    
-    # Create extended interpolation data to show forecast to 70 months
-    extended_end_date = bg_baseline_target_date  # Show up to 70 months after Claude 3.7 Sonnet
-    
-    # Create monthly date range
-    extended_interpolation_dates = []
-    current_date = gpt2_date
-    while current_date <= extended_end_date:
-        extended_interpolation_dates.append(current_date)
-        current_date += relativedelta(months=1)
-    
-    # Calculate progress multipliers for extended range
-    extended_interpolation_progress_multipliers = []
-    for date in extended_interpolation_dates:
-        months_diff = (date.year - baseline_date.year) * 12 + (date.month - baseline_date.month)
-        interp_progress_mult = interpolate_fn(months_diff)
-        extended_interpolation_progress_multipliers.append(interp_progress_mult)
-    
-    # Plot actual data
-    ax_baseline_bg.scatter(parsed_dates, progress_multiplier, s=100, alpha=0.7, color='red', label='Actual Data')
-    
-    # Add interpolation curve
-    ax_baseline_bg.plot(extended_interpolation_dates, extended_interpolation_progress_multipliers, 
-                        color='green', linewidth=2, alpha=0.8, label='Claude 3.7 Baseline Interpolation')
-    
-    # Add vertical lines for key dates
-    ax_baseline_bg.axvline(x=baseline_date, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet (Feb 2025)')
-    ax_baseline_bg.axvline(x=end_of_2026, color='cyan', linestyle=':', alpha=0.7, label='End of 2026')
-    ax_baseline_bg.axvline(x=bg_baseline_target_date, color='orange', linestyle=':', alpha=0.7, label='70 months after Claude 3.7 Sonnet')
-    
-    # Add horizontal lines
-    ax_baseline_bg.axhline(y=8.5, color='red', linestyle='-', alpha=0.7, linewidth=2)
-    ax_baseline_bg.axhline(y=end2026_value_baseline, color='cyan', linestyle='-', alpha=0.7, linewidth=2)
-    
-    # Add text annotations
-    ax_baseline_bg.text(bg_baseline_target_date, 8.5, '  8.5 (median SC)', 
-                       verticalalignment='center', fontsize=12, color='red', fontweight='bold')
-    ax_baseline_bg.text(end_of_2026, end2026_value_baseline, f'  {end2026_value_baseline:.3f}', 
-                       verticalalignment='center', fontsize=12, color='cyan', fontweight='bold')
-    
-    # Add model names as labels
-    for i, model in enumerate(model_names):
-        if parsed_dates[i] is not None:
-            ax_baseline_bg.annotate(model, (parsed_dates[i], progress_multiplier.iloc[i]), 
-                                   xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
-    
-    # Connect actual data points with lines
-    ax_baseline_bg.plot(parsed_dates, progress_multiplier, alpha=0.5, color='gray', linestyle='--')
-    
-    # Set log scale for y-axis
-    ax_baseline_bg.set_yscale('log')
-    
-    # Customize plot
-    ax_baseline_bg.set_xlabel('Date', fontsize=12)
-    ax_baseline_bg.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
-    ax_baseline_bg.set_title('Claude 3.7 baseline interpolation benchmarks and gaps', fontsize=14)
-    ax_baseline_bg.grid(True, alpha=0.3)
-    ax_baseline_bg.legend()
-    
-    # Rotate x-axis labels for better readability
-    plt.setp(ax_baseline_bg.xaxis.get_majorticklabels(), rotation=45)
-    
-    # Make layout tight
-    plt.tight_layout()
-    
-    # Show the plot
-    plt.show()
-    
+
+    # # Add the two new "benchmarks and gaps" plots
+    # print("\n" + "="*50)
+    # print("BENCHMARKS AND GAPS ANALYSIS")
+    # print("="*50)
+    #
+    # # Calculate end of 2026 date
+    # end_of_2026 = datetime(2026, 12, 31)
+    #
+    # # Graph (a): GPT-3 to Claude 3.7 interpolation with end of 2026 marker
+    # if gpt3_interpolate_fn is not None:
+    #     # Calculate months from GPT-3 to end of 2026
+    #     gpt3_to_end2026_months = (end_of_2026.year - gpt3_date.year) * 12 + (end_of_2026.month - gpt3_date.month)
+    #     end2026_value_gpt3 = gpt3_interpolate_fn(gpt3_to_end2026_months)
+    #
+    #     print(f"GPT-3 to Claude 3.7 interpolation value at end of 2026: {end2026_value_gpt3:.6f}")
+    #
+    #     # For benchmarks and gaps, use 70 months target
+    #     bg_target_date = claude_37_date + relativedelta(months=70)
+    #     gpt3_to_bg_target_months = (bg_target_date.year - gpt3_date.year) * 12 + (bg_target_date.month - gpt3_date.month)
+    #     predicted_70m_value_bg = gpt3_interpolate_fn(gpt3_to_bg_target_months)
+    #
+    #     # Create extended interpolation data for benchmarks and gaps (70 months)
+    #     bg_end_date = bg_target_date
+    #     bg_interpolation_dates = []
+    #     current_date = gpt3_date
+    #     while current_date <= bg_end_date:
+    #         bg_interpolation_dates.append(current_date)
+    #         current_date += relativedelta(months=1)
+    #
+    #     bg_interpolation_progress_multipliers = []
+    #     for date in bg_interpolation_dates:
+    #         months_from_gpt3 = (date.year - gpt3_date.year) * 12 + (date.month - gpt3_date.month)
+    #         interp_progress_mult = gpt3_interpolate_fn(months_from_gpt3)
+    #         bg_interpolation_progress_multipliers.append(interp_progress_mult)
+    #
+    #     # Create figure for GPT-3 interpolation benchmarks and gaps
+    #     fig_gpt3_bg = plt.figure(figsize=(12, 8))
+    #     ax_gpt3_bg = fig_gpt3_bg.add_subplot(111)
+    #
+    #     # Plot Our Blinded Estimates
+    #     ax_gpt3_bg.scatter(parsed_dates, progress_multiplier, s=100, alpha=0.7, color='red', label='Our Blinded Estimates')
+    #
+    #     # Add interpolation curve (extended to 70 months)
+    #     ax_gpt3_bg.plot(bg_interpolation_dates, bg_interpolation_progress_multipliers,
+    #                     color='green', linewidth=2, alpha=0.8, label='GPT-3 to Claude 3.7 Interpolation')
+    #
+    #     # Add vertical lines for key dates
+    #     ax_gpt3_bg.axvline(x=gpt3_date, color='blue', linestyle=':', alpha=0.7, label='GPT-3 (Jun 2020)')
+    #     ax_gpt3_bg.axvline(x=claude_37_date, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet (Feb 2025)')
+    #     ax_gpt3_bg.axvline(x=end_of_2026, color='cyan', linestyle=':', alpha=0.7, label='End of 2026')
+    #     ax_gpt3_bg.axvline(x=bg_target_date, color='orange', linestyle=':', alpha=0.7, label='70 months after Claude 3.7 Sonnet')
+    #
+    #     # Add horizontal lines
+    #     ax_gpt3_bg.axhline(y=predicted_70m_value_bg, color='orange', linestyle='--', alpha=0.5)
+    #     ax_gpt3_bg.axhline(y=8.5, color='red', linestyle='-', alpha=0.7, linewidth=2)
+    #     ax_gpt3_bg.axhline(y=end2026_value_gpt3, color='cyan', linestyle='-', alpha=0.7, linewidth=2)
+    #
+    #     # Add text annotations
+    #     ax_gpt3_bg.text(bg_target_date, predicted_70m_value_bg, f'  {predicted_70m_value_bg:.3f}',
+    #                    verticalalignment='center', fontsize=12, color='orange', fontweight='bold')
+    #     ax_gpt3_bg.text(bg_target_date, 8.5, '  8.5 (median SC)',
+    #                    verticalalignment='center', fontsize=12, color='red', fontweight='bold')
+    #     ax_gpt3_bg.text(end_of_2026, end2026_value_gpt3, f'  {end2026_value_gpt3:.3f}',
+    #                    verticalalignment='center', fontsize=12, color='cyan', fontweight='bold')
+    #
+    #     # Add model names as labels
+    #     for i, model in enumerate(model_names):
+    #         if parsed_dates[i] is not None:
+    #             ax_gpt3_bg.annotate(model, (parsed_dates[i], progress_multiplier.iloc[i]),
+    #                                xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
+    #
+    #     # Connect Our Blinded Estimates points with lines
+    #     ax_gpt3_bg.plot(parsed_dates, progress_multiplier, alpha=0.5, color='gray', linestyle='--')
+    #
+    #     # Set log scale for y-axis with plain number formatting
+    #     ax_gpt3_bg.set_yscale('log')
+    #     ax_gpt3_bg.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+    #
+    #     # Customize plot
+    #     ax_gpt3_bg.set_xlabel('Date', fontsize=12)
+    #     ax_gpt3_bg.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
+    #     ax_gpt3_bg.set_title('GPT-3 to Claude 3.7 interpolation benchmarks and gaps', fontsize=14)
+    #     ax_gpt3_bg.grid(True, alpha=0.3)
+    #     ax_gpt3_bg.legend()
+    #
+    #     # Rotate x-axis labels for better readability
+    #     plt.setp(ax_gpt3_bg.xaxis.get_majorticklabels(), rotation=45)
+    #
+    #     # Make layout tight
+    #     plt.tight_layout()
+    #
+    #     # Save the plot
+    #     plt.savefig(os.path.join(OUTPUT_DIR, 'gpt3_benchmarks_and_gaps.png'), dpi=150, bbox_inches='tight')
+    #     plt.close()
+    #
+    # # Graph (b): Claude 3.7 baseline interpolation with end of 2026 marker
+    # # Calculate months from Claude 3.7 baseline to end of 2026
+    # baseline_to_end2026_months = (end_of_2026.year - baseline_date.year) * 12 + (end_of_2026.month - baseline_date.month)
+    # end2026_value_baseline = interpolate_fn(baseline_to_end2026_months)
+    #
+    # print(f"Claude 3.7 baseline interpolation value at end of 2026: {end2026_value_baseline:.6f}")
+    #
+    # # For benchmarks and gaps, create a special interpolation for 70 months
+    # # This uses the same monthly multiplier but extends to 70 months
+    # bg_baseline_target_date = baseline_date + relativedelta(months=70)
+    #
+    # # Create figure for Claude 3.7 baseline benchmarks and gaps
+    # fig_baseline_bg = plt.figure(figsize=(12, 8))
+    # ax_baseline_bg = fig_baseline_bg.add_subplot(111)
+    #
+    # # Create extended interpolation data to show forecast to 70 months
+    # extended_end_date = bg_baseline_target_date  # Show up to 70 months after Claude 3.7 Sonnet
+    #
+    # # Create monthly date range
+    # extended_interpolation_dates = []
+    # current_date = gpt2_date
+    # while current_date <= extended_end_date:
+    #     extended_interpolation_dates.append(current_date)
+    #     current_date += relativedelta(months=1)
+    #
+    # # Calculate progress multipliers for extended range
+    # extended_interpolation_progress_multipliers = []
+    # for date in extended_interpolation_dates:
+    #     months_diff = (date.year - baseline_date.year) * 12 + (date.month - baseline_date.month)
+    #     interp_progress_mult = interpolate_fn(months_diff)
+    #     extended_interpolation_progress_multipliers.append(interp_progress_mult)
+    #
+    # # Plot Our Blinded Estimates
+    # ax_baseline_bg.scatter(parsed_dates, progress_multiplier, s=100, alpha=0.7, color='red', label='Our Blinded Estimates')
+    #
+    # # Add interpolation curve
+    # ax_baseline_bg.plot(extended_interpolation_dates, extended_interpolation_progress_multipliers,
+    #                     color='green', linewidth=2, alpha=0.8, label='Claude 3.7 Baseline Interpolation')
+    #
+    # # Add vertical lines for key dates
+    # ax_baseline_bg.axvline(x=baseline_date, color='purple', linestyle=':', alpha=0.7, label='Claude 3.7 Sonnet (Feb 2025)')
+    # ax_baseline_bg.axvline(x=end_of_2026, color='cyan', linestyle=':', alpha=0.7, label='End of 2026')
+    # ax_baseline_bg.axvline(x=bg_baseline_target_date, color='orange', linestyle=':', alpha=0.7, label='70 months after Claude 3.7 Sonnet')
+    #
+    # # Add horizontal lines
+    # ax_baseline_bg.axhline(y=8.5, color='red', linestyle='-', alpha=0.7, linewidth=2)
+    # ax_baseline_bg.axhline(y=end2026_value_baseline, color='cyan', linestyle='-', alpha=0.7, linewidth=2)
+    #
+    # # Add text annotations
+    # ax_baseline_bg.text(bg_baseline_target_date, 8.5, '  8.5 (median SC)',
+    #                    verticalalignment='center', fontsize=12, color='red', fontweight='bold')
+    # ax_baseline_bg.text(end_of_2026, end2026_value_baseline, f'  {end2026_value_baseline:.3f}',
+    #                    verticalalignment='center', fontsize=12, color='cyan', fontweight='bold')
+    #
+    # # Add model names as labels
+    # for i, model in enumerate(model_names):
+    #     if parsed_dates[i] is not None:
+    #         ax_baseline_bg.annotate(model, (parsed_dates[i], progress_multiplier.iloc[i]),
+    #                                xytext=(5, 5), textcoords='offset points', fontsize=9, alpha=0.8)
+    #
+    # # Connect Our Blinded Estimates points with lines
+    # ax_baseline_bg.plot(parsed_dates, progress_multiplier, alpha=0.5, color='gray', linestyle='--')
+    #
+    # # Set log scale for y-axis with plain number formatting
+    # ax_baseline_bg.set_yscale('log')
+    # ax_baseline_bg.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+    #
+    # # Customize plot
+    # ax_baseline_bg.set_xlabel('Date', fontsize=12)
+    # ax_baseline_bg.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
+    # ax_baseline_bg.set_title('Claude 3.7 baseline interpolation benchmarks and gaps', fontsize=14)
+    # ax_baseline_bg.grid(True, alpha=0.3)
+    # ax_baseline_bg.legend()
+    #
+    # # Rotate x-axis labels for better readability
+    # plt.setp(ax_baseline_bg.xaxis.get_majorticklabels(), rotation=45)
+    #
+    # # Make layout tight
+    # plt.tight_layout()
+    #
+    # # Save the plot
+    # plt.savefig(os.path.join(OUTPUT_DIR, 'baseline_benchmarks_and_gaps.png'), dpi=150, bbox_inches='tight')
+    # plt.close()
+
     # Fit double exponential to the "Progress multiplier w/Apr 2025 as 1" data
     print("\n" + "="*50)
     print("DOUBLE EXPONENTIAL ANALYSIS")
@@ -863,23 +921,24 @@ def load_and_plot_aird_estimates():
             ax1.text(0.5, 0.5, 'Original fit failed', transform=ax1.transAxes, 
                     ha='center', va='center', fontsize=16, color='red')
         
-        # Set log scale for y-axis
+        # Set log scale for y-axis with plain number formatting
         ax1.set_yscale('log')
-        
+        ax1.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+
         # Customize first plot
         ax1.set_xlabel('Months Since GPT-2', fontsize=12)
         ax1.set_ylabel('Progress Multiplier w/Apr 2025 as 1 (log scale)', fontsize=12)
         ax1.set_title('Double Exponential Fit (Historical Data Only)', fontsize=14)
         ax1.grid(True, alpha=0.3)
         ax1.legend()
-        
+
         # Second subplot: Constrained fit with target point (full timeline)
         if popt is not None:
-            # Separate actual data from target point
+            # Separate Our Blinded Estimates from target point
             actual_indices = [i for i, model in enumerate(model_names_de) if "Target Point" not in model]
             target_indices = [i for i, model in enumerate(model_names_de) if "Target Point" in model]
             
-            # Plot actual data points
+            # Plot Our Blinded Estimates points
             ax2.scatter(x_data[actual_indices], y_data[actual_indices], s=100, alpha=0.7, color='red', 
                        label='Historical Data', zorder=5)
             
@@ -918,9 +977,10 @@ def load_and_plot_aird_estimates():
             ax2.text(0.5, 0.5, 'Constrained fit failed', transform=ax2.transAxes, 
                     ha='center', va='center', fontsize=16, color='red')
         
-        # Set log scale for y-axis
+        # Set log scale for y-axis with plain number formatting
         ax2.set_yscale('log')
-        
+        ax2.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+
         # Customize second plot
         ax2.set_xlabel('Months Since GPT-2', fontsize=12)
         ax2.set_ylabel('Progress Multiplier w/Apr 2025 as 1 (log scale)', fontsize=12)
@@ -958,9 +1018,10 @@ def load_and_plot_aird_estimates():
             ax3.text(0.5, 0.5, 'Constrained fit failed', transform=ax3.transAxes, 
                     ha='center', va='center', fontsize=16, color='red')
         
-        # Set log scale for y-axis
+        # Set log scale for y-axis with plain number formatting
         ax3.set_yscale('log')
-        
+        ax3.yaxis.set_major_formatter(FuncFormatter(plain_number_formatter))
+
         # Customize third plot
         ax3.set_xlabel('Months Since GPT-2', fontsize=12)
         ax3.set_ylabel('Progress Multiplier w/Apr 2025 as 1 (log scale)', fontsize=12)
@@ -970,13 +1031,15 @@ def load_and_plot_aird_estimates():
         
         # Make layout tight
         plt.tight_layout()
-        
-        # Show the plot
-        plt.show()
-        
+
+        # Save the plot
+        plt.savefig(os.path.join(OUTPUT_DIR, 'double_exponential_analysis.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+
     else:
         print("Double exponential fitting failed - skipping plot")
-    
+
+    print(f"\nAll plots saved to: {OUTPUT_DIR}")
     return df
 
 if __name__ == "__main__":
