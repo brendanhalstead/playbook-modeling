@@ -12,8 +12,7 @@ def plain_number_formatter(x, pos):
     if x >= 1:
         if x == int(x):
             return f'{int(x)}'
-        elif x < 10:
-            print(f'test {x:.2f}')
+        elif x < 100:
             return f'{x:.2f}'
         else:
             return f'{x:.1f}'
@@ -24,14 +23,17 @@ def plain_number_formatter(x, pos):
     else:
         return f'{x:.4f}'
 
+# Models to exclude from all plots
+EXCLUDED_MODELS = ['o4-mini', 'o3']
+
 # Output directory for saving figures
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'outputs', 'interpolation_plots')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def create_interpolation_model():
     """Create interpolation model based on Claude 3.7 Sonnet baseline"""
-    # Claude 3.7 Sonnet baseline (Feb 2025): progress multiplier = 1.1
-    baseline_progress_multiplier = 1.1
+    # Claude 3.7 Sonnet baseline (Feb 2025): progress multiplier from CSV
+    baseline_progress_multiplier = 1.08818835  # Actual value from progress_multiplier_estimates.csv
     baseline_date = datetime(2025, 2, 1)
     
     # 60 months later: progress multiplier = 8.5
@@ -68,7 +70,7 @@ def create_gpt3_to_claude37_interpolation(df):
     
     for idx, row in df.iterrows():
         try:
-            model_name = row['Column 1']
+            model_name = row['Model name']
             if 'GPT-3' in model_name and 'GPT-3.5' not in model_name:
                 gpt3_progress_mult = row['Progress multiplier']
                 month, year = row['Date'].split('/')
@@ -141,7 +143,7 @@ def fit_double_exponential_to_data_original(df):
             
             # Get progress multiplier w/Apr 2025 as 1
             progress_multiplier_apr2025.append(row['Progress multiplier w/Apr 2025 as 1'])
-            model_names.append(row['Column 1'])
+            model_names.append(row['Model name'])
         except:
             continue
     
@@ -234,7 +236,7 @@ def fit_double_exponential_to_data(df):
             
             # Get progress multiplier w/Apr 2025 as 1
             progress_multiplier_apr2025.append(row['Progress multiplier w/Apr 2025 as 1'])
-            model_names.append(row['Column 1'])
+            model_names.append(row['Model name'])
         except:
             continue
     
@@ -336,25 +338,28 @@ def fit_double_exponential_to_data(df):
         except:
             return None, x_data, y_data, model_names, 0, 0
 
-def load_and_plot_aird_estimates():
+def load_and_plot_progress_multiplier_estimates():
     """Load AIRD estimates CSV and plot progress multiplier vs. 80% time horizon"""
     
     # Read the CSV file
-    df = pd.read_csv('aird_estimates.csv')
+    df = pd.read_csv('progress_multiplier_estimates.csv')
     
     # Remove rows where all values are NaN or empty
     df = df.dropna(how='all')
     
     # Also remove rows where the essential columns are empty
     df = df.dropna(subset=['80% time horizon', 'Progress multiplier'])
-    
+
+    # Filter out excluded models
+    df = df[~df['Model name'].isin(EXCLUDED_MODELS)]
+
     # Print column names to debug
     print("Available columns:", df.columns.tolist())
     
     # Extract the columns we need
     time_horizon = df['80% time horizon'].astype(float)
     progress_multiplier = df['Progress multiplier'].astype(float)
-    model_names = df['Column 1']
+    model_names = df['Model name']
     dates = df['Date']
     
     # Parse dates - convert from "MM/YYYY" format to datetime
@@ -399,9 +404,9 @@ def load_and_plot_aird_estimates():
     # Create figure with single subplot (backcast only)
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     
-    # Filter interpolation data to only show backcast (before baseline_date)
-    backcast_dates = [d for d in interpolation_dates if d < baseline_date]
-    backcast_progress_multipliers = [interpolation_progress_multipliers[i] for i, d in enumerate(interpolation_dates) if d < baseline_date]
+    # Filter interpolation data to only show backcast (up to and including baseline_date)
+    backcast_dates = [d for d in interpolation_dates if d <= baseline_date]
+    backcast_progress_multipliers = [interpolation_progress_multipliers[i] for i, d in enumerate(interpolation_dates) if d <= baseline_date]
     
     # Filter Our Blinded Estimates to include backcast + Claude 3.7 Sonnet baseline point
     backcast_actual_dates = [d for d in parsed_dates if d is not None and d <= baseline_date]
@@ -451,6 +456,37 @@ def load_and_plot_aird_estimates():
     # Save the plot
     plt.savefig(os.path.join(OUTPUT_DIR, 'backcast_interpolation.png'), dpi=150, bbox_inches='tight')
     plt.close()
+
+    # Create comparison CSV of backcast interpolation vs blinded estimates
+    comparison_data = []
+    for i, (date, model) in enumerate(zip(parsed_dates, model_names)):
+        if date is None:
+            continue
+        # Calculate months from baseline (Claude 3.7 Sonnet)
+        months_from_baseline = (date.year - baseline_date.year) * 12 + (date.month - baseline_date.month)
+        # Get interpolated value
+        interpolated_value = interpolate_fn(months_from_baseline)
+        # Get actual blinded estimate
+        actual_value = progress_multiplier.iloc[i]
+        # Calculate difference
+        difference = actual_value - interpolated_value
+        pct_difference = (difference / interpolated_value) * 100 if interpolated_value != 0 else 0
+
+        comparison_data.append({
+            'Model': model,
+            'Date': date.strftime('%m/%Y'),
+            'Months from Claude 3.7': months_from_baseline,
+            'Blinded Estimate': actual_value,
+            'Interpolated Value': interpolated_value,
+            'Difference': difference,
+            'Percent Difference': pct_difference
+        })
+
+    # Create DataFrame and save to CSV
+    comparison_df = pd.DataFrame(comparison_data)
+    comparison_csv_path = os.path.join(OUTPUT_DIR, 'backcast_comparison.csv')
+    comparison_df.to_csv(comparison_csv_path, index=False)
+    print(f"\nBackcast comparison saved to: {comparison_csv_path}")
 
     # Print some basic statistics
     print("\nBasic Statistics:")
@@ -598,7 +634,7 @@ def load_and_plot_aird_estimates():
         
         # Second plot: Recent points only (no forecast to 60 months)
         # Show from GPT-3 to Claude 3.7 Sonnet period
-        recent_end_date = claude_37_date + relativedelta(months=6)  # A bit past Claude 3.7 Sonnet
+        recent_end_date = claude_37_date  # Stop at Claude 3.7 Sonnet
         
         # Filter data for recent period
         recent_actual_dates = [d for d in parsed_dates if d is not None and gpt3_date <= d <= recent_end_date]
@@ -1043,4 +1079,4 @@ def load_and_plot_aird_estimates():
     return df
 
 if __name__ == "__main__":
-    data = load_and_plot_aird_estimates()
+    data = load_and_plot_progress_multiplier_estimates()

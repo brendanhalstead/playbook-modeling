@@ -1,0 +1,14 @@
+Model name,Date,80% time horizon,Progress multiplier,Progress multiplier w/Apr 2025 as 1,Notes
+GPT-2 (baseline),2/2019,0.0056,1,0.9189585605,
+GPT-3,6/2020,0.03,1.000840896,0.9197313095,"Nikola and Alex people put exactly 1, which I excluded because otherwise aggregate would be 1"
+GPT-3.5,3/2022,0.17,1.004573051,0.9231610044,"Nikola put exactly 1, which I excluded because otherwise aggregate would be 1"
+GPT-4 0314,3/2023,1.02,1.014309691,0.9321085734,"Nikola put exactly 1, which I excluded because otherwise aggregate would be 1"
+GPT-4 1106,11/2023,1.35,1.023389428,0.9404524759,"Nikola put exactly 1, which I excluded because otherwise aggregate would be 1"
+GPT-4o ,5/2024,1.7,1.028472616,0.9451237146,
+o1-preview,8/2024,4.47,1.050302068,0.965184076,
+o1,12/2024,5.64,1.065196889,0.9788717993,
+Claude 3.7 Sonnet,2/2025,14.83,1.08818835,1,
+o4-mini,4/2025,14.6,1.109027236,1.019150072,"Not used in analysis since weren't out when AI 2027 was published.
+Only Steven + Alex + Nikola estimated, not directly comparable to above."
+o3,4/2025,19.9,1.125992105,1.034740084,"Not used in analysis since weren't out when AI 2027 was published.
+Only Steven + Alex + Nikola estimated, not directly comparable to above."
