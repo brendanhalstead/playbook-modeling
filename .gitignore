@@ -1,2 +1,4 @@
 .DS_Store
 */.DS_Store
+timelines_factor/__pycache__/
+timelines_factor/output/

@@ -157,6 +157,74 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     
     return fig
 
+
+def plot_results_cdf(all_forecaster_results: dict, config: dict) -> plt.Figure:
+    """Create CDF plot showing cumulative distribution of SC arrival times."""
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+
+    # Set monospace font
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig = plt.figure(figsize=(10, 6), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+
+    # Get current year for x-axis range
+    current_year = 2025.25
+    x_min = current_year
+    x_max = current_year + 11
+
+    # Plot each forecaster's CDF
+    for name, results in all_forecaster_results.items():
+        # Get the base name without any parenthetical text for config lookup
+        base_name = name.split(" (")[0].lower()
+        # Get color from config
+        color = config["forecasters"][base_name]["color"]
+
+        # Sort results for CDF
+        sorted_results = np.sort(results)
+        cdf = np.arange(1, len(sorted_results) + 1) / len(sorted_results)
+
+        # Plot CDF line
+        ax.plot(sorted_results, cdf, '-', color=color, label=name,
+                linewidth=2, alpha=0.8, zorder=2)
+
+
+    # Configure plot
+    ax.set_title("Superhuman Coder Arrival CDF, Time Horizon Extension",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Cumulative Probability", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+
+    # Set axis properties
+    ax.set_xticks(range(int(x_min), int(x_max) + 1))
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, 1)
+
+    # Add horizontal reference lines at key percentiles
+    for pct in [0.1, 0.5, 0.9]:
+        ax.axhline(y=pct, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+
+    # Grid and spines
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Add legend
+    legend = ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
+    legend.set_zorder(50)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    return fig
+
+
 def _parse_month_year(month_year_str: str) -> tuple[float, float, float]:
     """Return (start_decimal, end_decimal, mid_decimal) for a given 'Month YYYY'.
     Accepts both full (e.g. 'March 2027') and abbreviated (e.g. 'Mar 2027') month names.
@@ -1199,7 +1267,7 @@ def plot_combined_trajectories(
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
 
-    return fig
+    return fig, best_path
 
 # -----------------------------------------------------------------------------
 # New helper: compare multiple central trajectories on a single figure
@@ -1263,13 +1331,19 @@ def plot_central_trajectories_comparison(
     # ------------------------------------------------------------------
     # Determine ordering by SC month (earlier = faster) and assign colours
     # using a continuous colormap so the reader can perceive the ordering.
+    # Non-month labels (like "Unconditional") are placed at the end.
     # ------------------------------------------------------------------
-    try:
-        parsed_items = [(_parse_month_year(lbl)[2], lbl, traj) for lbl, traj in central_trajectories]
-        parsed_items.sort(key=lambda x: x[0])  # earliest first
-    except Exception:
-        # Fallback: use original order if parsing fails for any label
-        parsed_items = [(idx, lbl, traj) for idx, (lbl, traj) in enumerate(central_trajectories)]
+    parsed_items = []
+    non_month_items = []
+    for lbl, traj in central_trajectories:
+        try:
+            month_mid = _parse_month_year(lbl)[2]
+            parsed_items.append((month_mid, lbl, traj))
+        except Exception:
+            # Non-month labels (e.g., "Unconditional") go at the end
+            non_month_items.append((float('inf'), lbl, traj))
+    parsed_items.sort(key=lambda x: x[0])  # earliest first
+    parsed_items.extend(non_month_items)
 
     n_items = len(parsed_items)
     cmap = plt.get_cmap("plasma")  # perceptually ordered colormap
