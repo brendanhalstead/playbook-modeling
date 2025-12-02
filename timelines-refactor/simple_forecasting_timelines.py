@@ -636,6 +636,14 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     output_dir = Path("output") / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create subdirectories for trajectory types
+    combined_dir = output_dir / "combined_trajectories"
+    backcasted_dir = output_dir / "backcasted_trajectories"
+    central_dir = output_dir / "central_trajectories"
+    combined_dir.mkdir(exist_ok=True)
+    backcasted_dir.mkdir(exist_ok=True)
+    central_dir.mkdir(exist_ok=True)
+
     # Run median trajectory for each forecaster first and save to file
     print("\n" + "="*60)
     print("RUNNING MEDIAN TRAJECTORIES")
@@ -756,22 +764,22 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
 
         # Save and close the month-independent figures
         fig_backcasted_colored.savefig(
-            output_dir / f"backcasted_trajectories_{forecaster_name}.png",
+            backcasted_dir / f"backcasted_trajectories_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_backcasted_red.savefig(
-            output_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
+            backcasted_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_combined_colored.savefig(
-            output_dir / f"combined_trajectories_{forecaster_name}.png",
+            combined_dir / f"combined_trajectories_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_combined_red.savefig(
-            output_dir / f"combined_trajectories_red_{forecaster_name}.png",
+            combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -862,17 +870,17 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
                 bbox_inches="tight",
             )
             fig_combined_month.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month_median.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month_illustrative.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -897,14 +905,14 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             )
 
             fig_cent_compare.savefig(
-                output_dir / f"central_trajectories_comparison_{forecaster_name}.png",
+                central_dir / f"central_trajectories_comparison_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
 
             plt.close(fig_cent_compare)
         print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
-    
+
     for sc_month_str in target_months:
         fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
             [(forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str]) for forecaster_name in monthly_central_trajectories_by_forecaster.keys()],
@@ -913,7 +921,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
         )
         fig_cent_forecaster_comparison_month.savefig(
-            output_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+            central_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -985,6 +993,14 @@ def regenerate_plots(output_dir: str | Path):
     """
     output_dir = Path(output_dir)
 
+    # Create subdirectories for trajectory types
+    combined_dir = output_dir / "combined_trajectories"
+    backcasted_dir = output_dir / "backcasted_trajectories"
+    central_dir = output_dir / "central_trajectories"
+    combined_dir.mkdir(exist_ok=True)
+    backcasted_dir.mkdir(exist_ok=True)
+    central_dir.mkdir(exist_ok=True)
+
     # Load trajectory data
     with open(output_dir / "trajectory_data.pkl", "rb") as f:
         trajectory_data = pickle.load(f)
@@ -1053,22 +1069,22 @@ def regenerate_plots(output_dir: str | Path):
 
         # Save and close the month-independent figures
         fig_backcasted_colored.savefig(
-            output_dir / f"backcasted_trajectories_{forecaster_name}.png",
+            backcasted_dir / f"backcasted_trajectories_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_backcasted_red.savefig(
-            output_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
+            backcasted_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_combined_colored.savefig(
-            output_dir / f"combined_trajectories_{forecaster_name}.png",
+            combined_dir / f"combined_trajectories_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_combined_red.savefig(
-            output_dir / f"combined_trajectories_red_{forecaster_name}.png",
+            combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -1153,17 +1169,17 @@ def regenerate_plots(output_dir: str | Path):
                 bbox_inches="tight",
             )
             fig_combined_month.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month_median.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month_illustrative.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -1184,7 +1200,7 @@ def regenerate_plots(output_dir: str | Path):
             )
 
             fig_cent_compare.savefig(
-                output_dir / f"central_trajectories_comparison_{forecaster_name}.png",
+                central_dir / f"central_trajectories_comparison_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -1201,7 +1217,7 @@ def regenerate_plots(output_dir: str | Path):
             title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
         )
         fig_cent_forecaster_comparison_month.savefig(
-            output_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+            central_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
             dpi=300,
             bbox_inches="tight",
         )

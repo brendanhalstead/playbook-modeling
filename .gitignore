@@ -1,4 +1,9 @@
 .DS_Store
 */.DS_Store
-timelines_factor/__pycache__/
-timelines_factor/output/
+
+# Python cache directories
+__pycache__/
+**/__pycache__/
+
+# Output directories
+**/output/

@@ -172,12 +172,20 @@ def get_median_samples(config: dict) -> dict:
     )
     samples["SC_prog_multiplier"] = np.array([dist.median()])
 
-    # Use exponential growth for median trajectory
-    samples["is_superexponential"] = np.array([False])
+    # Use superexponential growth for median trajectory
+    # Find the first horizon where cumulative probability >= 0.5
+    superexp_schedule = config["distributions"]["superexponential_schedule_months"]
+    median_superexp_start = np.inf
+    for horizon, prob in superexp_schedule:
+        if prob >= 0.5:
+            median_superexp_start = horizon
+            break
+
+    samples["is_superexponential"] = np.array([median_superexp_start < np.inf])
     samples["is_subexponential"] = np.array([False])
-    samples["is_exponential"] = np.array([True])
-    samples["superexponential_start_horizon"] = np.array([np.inf])
-    samples["superexponential_schedule_months"] = config["distributions"]["superexponential_schedule_months"]
+    samples["is_exponential"] = np.array([median_superexp_start == np.inf])
+    samples["superexponential_start_horizon"] = np.array([median_superexp_start])
+    samples["superexponential_schedule_months"] = superexp_schedule
 
     # Get median for se_doubling_decay_fraction
     dist = get_lognormal_from_80_ci(
@@ -226,7 +234,11 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
     lines.append(f"  present_prog_multiplier: {median_samples['present_prog_multiplier'][0]:.3f}")
     lines.append(f"  SC_prog_multiplier: {median_samples['SC_prog_multiplier'][0]:.2f}")
     lines.append(f"  initial_software_progress_share: {median_samples['initial_software_progress_share'][0]:.3f}")
-    lines.append(f"  growth_type: Exponential")
+    if median_samples["is_superexponential"][0]:
+        lines.append(f"  growth_type: Superexponential (starts at {median_samples['superexponential_start_horizon'][0]:.1f} month horizon)")
+        lines.append(f"  se_doubling_decay_fraction: {median_samples['se_doubling_decay_fraction'][0]:.3f}")
+    else:
+        lines.append(f"  growth_type: Exponential")
 
     # Run simulation
     current_horizon = config["simulation"]["current_horizon"]
@@ -925,6 +937,14 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
     output_dir = Path("output") / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create subdirectories for trajectory types
+    combined_dir = output_dir / "combined_trajectories"
+    backcasted_dir = output_dir / "backcasted_trajectories"
+    central_dir = output_dir / "central_trajectories"
+    combined_dir.mkdir(exist_ok=True)
+    backcasted_dir.mkdir(exist_ok=True)
+    central_dir.mkdir(exist_ok=True)
+
     # Run median trajectory for each forecaster first and save to file
     print("\n" + "="*60)
     print("RUNNING MEDIAN TRAJECTORIES")
@@ -1075,22 +1095,22 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
 
         # Save and close the month-independent figures
         fig_backcasted_colored.savefig(
-            output_dir / f"backcasted_trajectories_{forecaster_name}.png",
+            backcasted_dir / f"backcasted_trajectories_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_backcasted_red.savefig(
-            output_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
+            backcasted_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_combined_colored.savefig(
-            output_dir / f"combined_trajectories_{forecaster_name}.png",
+            combined_dir / f"combined_trajectories_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
         fig_combined_red.savefig(
-            output_dir / f"combined_trajectories_red_{forecaster_name}.png",
+            combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
@@ -1177,17 +1197,17 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                 bbox_inches="tight",
             )
             fig_combined_month.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month_median.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month_illustrative.savefig(
-                output_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
+                combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -1212,7 +1232,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             )
 
             fig_cent_compare.savefig(
-                output_dir / f"central_trajectories_comparison_{forecaster_name}.png",
+                central_dir / f"central_trajectories_comparison_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )

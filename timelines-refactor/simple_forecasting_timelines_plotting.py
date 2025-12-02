@@ -636,19 +636,44 @@ def plot_combined_trajectories_sc_month(
                                 xytext=(5, -5), ha='left', fontsize=config["plotting_style"]["font"]["sizes"]["ticks"], color='black')
 
     # ---------------------------------------------------------------------
-    # Overlay illustrative SE trend if requested (same CSV as original impl.)
+    # Overlay illustrative SE trends if requested
     # ---------------------------------------------------------------------
     if overlay_illustrative_trend:
-        trend_path = Path("../external/illustrative_se_trend_converted.csv")
-        if trend_path.exists():
+        # Original illustrative graph trend (exp_power model)
+        original_trend_path = Path("../external/original_graph_trend_generated.csv")
+        if original_trend_path.exists():
             try:
-                trend_df = pd.read_csv(trend_path)
-                mask = (trend_df['year'] >= x_min) & (trend_df['year'] <= x_max)
+                original_df = pd.read_csv(original_trend_path)
+                mask = (original_df['year'] >= x_min) & (original_df['year'] <= x_max)
                 if mask.any():
-                    ax.plot(trend_df.loc[mask, 'year'], trend_df.loc[mask, 'horizon_minutes'],
+                    ax.plot(original_df.loc[mask, 'year'], original_df.loc[mask, 'horizon_minutes'],
                             color='black', linewidth=2, alpha=0.7)
             except Exception as e:
-                print(f"Warning: failed to plot illustrative trend: {e}")
+                print(f"Warning: failed to plot original illustrative trend: {e}")
+
+        # Mistaken illustrative graph trend (y-doubling model)
+        wrong_qty_trend_path = Path("../external/illustrative_se_trend_generated.csv")
+        if wrong_qty_trend_path.exists():
+            try:
+                wrong_qty_df = pd.read_csv(wrong_qty_trend_path)
+                mask = (wrong_qty_df['year'] >= x_min) & (wrong_qty_df['year'] <= x_max)
+                if mask.any():
+                    ax.plot(wrong_qty_df.loc[mask, 'year'], wrong_qty_df.loc[mask, 'horizon_minutes'],
+                            color='gray', linewidth=2, alpha=0.5, linestyle=':')
+            except Exception as e:
+                print(f"Warning: failed to plot wrong-qty illustrative trend: {e}")
+
+        # Fixed illustrative graph trend (horizon-doubling model)
+        fixed_trend_path = Path("../external/fixed_illustrative_graph_trend.csv")
+        if fixed_trend_path.exists():
+            try:
+                fixed_df = pd.read_csv(fixed_trend_path)
+                mask = (fixed_df['year'] >= x_min) & (fixed_df['year'] <= x_max)
+                if mask.any():
+                    ax.plot(fixed_df.loc[mask, 'year'], fixed_df.loc[mask, 'horizon_minutes'],
+                            color='darkblue', linewidth=2, alpha=0.7, linestyle='--')
+            except Exception as e:
+                print(f"Warning: failed to plot fixed illustrative trend: {e}")
 
     # -------------------------------------------------------------
     # Assemble custom legend (mirrors original combined plot)
@@ -680,7 +705,9 @@ def plot_combined_trajectories_sc_month(
     if plot_median_curve:
         legend_elements.append(Line2D([0], [0], color='red', linewidth=2, linestyle=':', label='Median'))
     if overlay_illustrative_trend:
-        legend_elements.append(Line2D([0], [0], color='black', linewidth=2, label='Previous Illustrative Trend'))
+        legend_elements.append(Line2D([0], [0], color='black', linewidth=2, label='Original illustrative graph trend'))
+        legend_elements.append(Line2D([0], [0], color='gray', linewidth=2, linestyle=':', alpha=0.5, label='Mistaken illustrative graph trend'))
+        legend_elements.append(Line2D([0], [0], color='darkblue', linewidth=2, linestyle='--', label='Intended illustrative graph trend'))
 
     legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)

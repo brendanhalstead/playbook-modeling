@@ -26,8 +26,8 @@ plotting_style:
 
 # Forecaster configurations
 forecasters:
-  eli_exp_only:
-    name: "Eli_exp_only"
+  eli:
+    name: "Eli"
     color: "#900000"
     distributions:
       h_SC_ci: [1, 14400]  # Months needed for SC
@@ -36,20 +36,89 @@ forecasters:
       announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
       present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
       SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
-      p_superexponential: 0  # Probability of superexponential growth
-      p_subexponential: 0    # Probability of subexponential growth
+      p_superexponential: 0.45 # Probability of superexponential growth
+      p_subexponential: 0.1    # Probability of subexponential growth
       se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
       sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
       patch_rd_speedup: False
-  eli_superexp_only:
-    name: "Eli_superexp_only"
-    color: "#003000"
-    parent: "eli_exp_only"
-    distributions:
-      p_superexponential: 1.0  # Probability of superexponential growth
-      p_subexponential: 0.0
+  # eli_exp_only:
+  #   name: "Eli_exp_only"
+  #   color: "#003000"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 0.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
+  # eli_superexp_only:
+  #   name: "Eli_superexp_only"
+  #   color: "#0000AA"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 1.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
+  # eli_patched_rd_speedup:
+  #   name: "Eli_patched_rd_speedup"
+  #   color: "#900000"
+  #   distributions:
+  #     h_SC_ci: [1, 14400]  # Months needed for SC
+  #     T_t_ci: [2.5, 9]        # Horizon doubling time in months
+  #     cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
+  #     announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
+  #     present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+  #     SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
+  #     p_superexponential: 0.45 # Probability of superexponential growth
+  #     p_subexponential: 0.1    # Probability of subexponential growth
+  #     se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
+  #     sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
+  #     se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+  #     sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+  #     patch_rd_speedup: True
+  # eli_exp_only_patched_rd_speedup:
+  #   name: "Eli_exp_only_patched_rd_speedup"
+  #   color: "#003000"
+  #   parent: "eli_patched_rd_speedup"
+  #   distributions:
+  #     p_superexponential: 0.0
+  #     p_subexponential: 0.0
+  # eli_superexp_only_patched_rd_speedup:
+  #   name: "Eli_superexp_only_patched_rd_speedup"
+  #   color: "#0000AA"
+  #   parent: "eli_patched_rd_speedup"
+  #   distributions:
+  #     p_superexponential: 1.0
+  #     p_subexponential: 0.0
+  # eli_narrow_exp:
+  #   name: "Eli_narrow_exp"
+  #   color: "#0000AA"
+  #   distributions:
+  #     # Same medians as eli_exp_only but with very narrow CIs
+  #     # Median of [1, 14400] = sqrt(1*14400) = 120
+  #     h_SC_ci: [119, 121]
+  #     # Median of [2.5, 9] = sqrt(2.5*9) = 4.74
+  #     T_t_ci: [4.72, 4.76]
+  #     # Median of [0.5, 30] = sqrt(0.5*30) = 3.87
+  #     cost_speed_ci: [3.85, 3.89]
+  #     # Median of [0.25, 6] = sqrt(0.25*6) = 1.22
+  #     announcement_delay_ci: [1.21, 1.23]
+  #     # Median of [0.03, 0.3] = sqrt(0.03*0.3) = 0.095
+  #     present_prog_multiplier_ci: [0.094, 0.096]
+  #     # Median of [1.5, 40.0] = sqrt(1.5*40) = 7.75
+  #     SC_prog_multiplier_ci: [7.70, 7.80]
+  #     p_superexponential: 0
+  #     p_subexponential: 0
+  #     se_speedup_ci: [0.05, 0.5]
+  #     sub_slowdown_ci: [0.01, 0.2]
+  #     se_doubling_decay_fraction: 0.1
+  #     sub_doubling_growth_fraction: 0.1
+  #     patch_rd_speedup: False
+  # eli_narrow_superexp:
+  #   name: "Eli_narrow_superexp"
+  #   color: "#003000"
+  #   parent: "eli_narrow_exp"
+  #   distributions:
+  #     p_superexponential: 1.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
   # eli_patched_rd_speedup:
   #   name: "Eli_patched_rd_speedup"
   #   color: "#003000"
