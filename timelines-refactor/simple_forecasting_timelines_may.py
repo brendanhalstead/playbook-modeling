@@ -8,7 +8,8 @@ from tqdm import tqdm
 from simple_forecasting_timelines_plotting import *
 from timelines_common import *
 
-
+# Set the disclaimer variant for May plots
+set_disclaimer_variant("may")
 
 
 def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
@@ -1054,7 +1055,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
     plt.close(fig)
 
     # Create and save CDF plot
-    fig_cdf = plot_results_cdf(all_forecaster_results, config)
+    fig_cdf = plot_results_cdf(all_forecaster_results, config, show_percentile_lines=False)
     fig_cdf.savefig(output_dir / "simple_combined_headline_cdf.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cdf)
     for forecaster_name in all_forecaster_results.keys():

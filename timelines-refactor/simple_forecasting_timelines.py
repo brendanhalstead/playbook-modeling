@@ -171,8 +171,16 @@ def format_horizon(h: float) -> str:
         return f"{h/43200:.1f} months"
 
 
-def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> str:
-    """Run trajectories with median parameters for both exponential and superexponential growth."""
+def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> tuple[str, dict]:
+    """Run trajectories with median parameters for both exponential and superexponential growth.
+
+    Returns
+    -------
+    tuple[str, dict]
+        A tuple of (text_output, trajectory_data) where trajectory_data is a dict
+        mapping growth_type ("exponential", "superexponential") to trajectory dicts
+        with "times" and "horizons" arrays.
+    """
     # Create config with this forecaster's distributions
     forecaster_dist_config = {"distributions": forecaster_config["distributions"]}
 
@@ -201,6 +209,9 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
     human_alg_progress_decrease_date = config["simulation"]["human_alg_progress_decrease_date"]
     max_simulation_years = config["simulation"]["max_simulation_years"]
 
+    # Store trajectory data for plotting
+    trajectory_data = {}
+
     # Run both exponential and superexponential trajectories
     for growth_type in ["Exponential", "Superexponential"]:
         # Set growth type flags
@@ -215,14 +226,39 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
 
         lines.append(f"\n--- {growth_type} Growth ---")
 
-        # Run simulation
-        ending_times, trajectories = calculate_sc_arrival_year_with_trajectories(
+        # Run forward simulation
+        ending_times, forward_trajectories = calculate_sc_arrival_year_with_trajectories(
             median_samples, current_horizon, dt,
             compute_decrease_date, human_alg_progress_decrease_date, max_simulation_years
         )
 
+        # Run backcast
+        backcast_trajs = backcast_trajectories(
+            median_samples, current_horizon, dt, backcast_years=5
+        )
+
         arrival_year = ending_times[0]
-        trajectory = trajectories[0]
+        fore_traj = forward_trajectories[0] if forward_trajectories else []
+        back_traj = backcast_trajs[0] if backcast_trajs else []
+
+        # Combine backcast and forward trajectories for plotting
+        combined_t = []
+        combined_h = []
+        if back_traj:
+            bt, bh = zip(*back_traj)
+            combined_t.extend(bt)
+            combined_h.extend(bh)
+        if fore_traj:
+            ft, fh = zip(*fore_traj)
+            combined_t.extend(ft)
+            combined_h.extend(fh)
+
+        if combined_t:
+            order = np.argsort(combined_t)
+            trajectory_data[growth_type.lower()] = {
+                'times': np.array(combined_t)[order],
+                'horizons': np.array(combined_h)[order]
+            }
 
         lines.append(f"SC Arrival: {format_year_month(arrival_year)}")
         lines.append(f"\nTrajectory (selected points):")
@@ -230,24 +266,24 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
         lines.append(f"  {'-'*12} {'-'*20}")
 
         # Print trajectory at key points
-        if trajectory:
-            n_points = len(trajectory)
+        if fore_traj:
+            n_points = len(fore_traj)
             # Show ~10 evenly spaced points
             step = max(1, n_points // 10)
             for i in range(0, n_points, step):
-                t, h = trajectory[i]
+                t, h = fore_traj[i]
                 lines.append(f"  {format_year_month(t):<12} {format_horizon(h):<20}")
 
             # Always show final point
             if n_points > 1:
-                t, h = trajectory[-1]
+                t, h = fore_traj[-1]
                 lines.append(f"  {format_year_month(t):<12} {format_horizon(h):<20} (final)")
 
     lines.append(f"\n{'='*60}\n")
 
     result = "\n".join(lines)
     print(result)
-    return result
+    return result, trajectory_data
 
 
 def calculate_base_time(samples: dict, current_horizon: float) -> tuple[np.ndarray, list]:
@@ -565,7 +601,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
     # First calculate base time including cost-and-speed adjustment and get horizon mappings
     base_time_in_months, _ = calculate_base_time(samples, current_horizon)
     horizon_mappings = backcast_base_time(samples, current_horizon, dt, backcast_years)
-    n_sims = len(base_time_in_months)
+    n_sims = len(base_time_in_months) # EL: why len(base_time_in_months)?
     
     # Store trajectories for each simulation
     trajectories = []
@@ -605,6 +641,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
                 v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # Update progress and time
+            # import pdb; pdb.set_trace()
             progress -= dt * v_algorithmic
             time -= dt / 12  # Convert months to years
 
@@ -616,15 +653,54 @@ def format_year_month(year_decimal: float) -> str:
     """Convert decimal year to Month Year format."""
     if year_decimal >= 2050:
         return ">2050"
-        
+
     year = int(year_decimal)
     month = int((year_decimal % 1) * 12) + 1
     month_name = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month-1]
     return f"{month_name} {year}"
 
-def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[plt.Figure, dict]:
-    """Run simplified SC simulation and plot results."""
+
+def format_year_month_full(year_decimal: float) -> str:
+    """Convert decimal year to full Month Year format (e.g., 'January 2027')."""
+    if year_decimal >= 2050:
+        return ">2050"
+
+    year = int(year_decimal)
+    month = int((year_decimal % 1) * 12) + 1
+    month_names = ['January', 'February', 'March', 'April', 'May', 'June',
+                   'July', 'August', 'September', 'October', 'November', 'December']
+    return f"{month_names[month-1]} {year}"
+
+
+def get_forecaster_growth_type(samples: dict) -> str | None:
+    """Determine if a forecaster has a single growth type across all samples.
+
+    Returns
+    -------
+    str | None
+        "exponential" if all samples are exponential,
+        "superexponential" if all samples are superexponential,
+        None if mixed.
+    """
+    is_exp = samples["is_exponential"]
+    is_superexp = samples["is_superexponential"]
+
+    if np.all(is_exp):
+        return "exponential"
+    elif np.all(is_superexp):
+        return "superexponential"
+    return None
+
+
+def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[plt.Figure, dict, dict, dict]:
+    """Run simplified SC simulation and plot results.
+
+    Returns
+    -------
+    tuple[plt.Figure, dict, dict, dict]
+        (fig, all_forecaster_results, monthly_central_trajectories_by_forecaster, median_trajectory_data)
+    """
     print("Loading configuration...")
     config = load_config(config_path)
 
@@ -640,18 +716,22 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     combined_dir = output_dir / "combined_trajectories"
     backcasted_dir = output_dir / "backcasted_trajectories"
     central_dir = output_dir / "central_trajectories"
+    forecasted_dir = output_dir / "forecasted_trajectories"
     combined_dir.mkdir(exist_ok=True)
     backcasted_dir.mkdir(exist_ok=True)
     central_dir.mkdir(exist_ok=True)
+    forecasted_dir.mkdir(exist_ok=True)
 
     # Run median trajectory for each forecaster first and save to file
     print("\n" + "="*60)
     print("RUNNING MEDIAN TRAJECTORIES")
     print("="*60)
     median_results = []
+    median_trajectory_data = {}  # forecaster_name -> {growth_type: trajectory_dict}
     for forecaster_key, forecaster_config in config["forecasters"].items():
-        result = run_median_trajectory(config, forecaster_config, forecaster_config["name"])
+        result, traj_data = run_median_trajectory(config, forecaster_config, forecaster_config["name"])
         median_results.append(result)
+        median_trajectory_data[forecaster_config["name"]] = traj_data
 
     # Save median trajectory results to file
     with open(output_dir / "median_trajectories.txt", "w") as f:
@@ -659,6 +739,22 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("\n".join(median_results))
     print(f"Saved median trajectories to {output_dir / 'median_trajectories.txt'}")
+
+    # Generate simple median trajectory comparison plots for each growth type
+    for growth_type in ["exponential", "superexponential"]:
+        fig_median_simple = plot_median_trajectories_simple(
+            median_trajectory_data,
+            config,
+            growth_type=growth_type,
+            overlay_external_data=True,
+        )
+        fig_median_simple.savefig(
+            output_dir / f"median_trajectories_{growth_type}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig_median_simple)
+        print(f"Saved median trajectory plot ({growth_type}) to {output_dir / f'median_trajectories_{growth_type}.png'}")
 
     # Get current date as decimal year
     # current_date = datetime.now()
@@ -743,24 +839,25 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             forecaster_filter=[forecaster_name],
         )
 
-        fig_combined_colored, unconditional_central_path = plot_combined_trajectories(
-            all_forecaster_backcast_trajectories,
-            all_forecaster_trajectories,
-            all_forecaster_samples,
-            config,
-            color_by_growth_type=True,
-            plot_median_curve=True,
-            forecaster_filter=[forecaster_name],
-        )
+        # # Commented out: unconditional combined trajectories
+        # fig_combined_colored, unconditional_central_path = plot_combined_trajectories(
+        #     all_forecaster_backcast_trajectories,
+        #     all_forecaster_trajectories,
+        #     all_forecaster_samples,
+        #     config,
+        #     color_by_growth_type=True,
+        #     plot_median_curve=True,
+        #     forecaster_filter=[forecaster_name],
+        # )
 
-        fig_combined_red, _ = plot_combined_trajectories(
-            all_forecaster_backcast_trajectories,
-            all_forecaster_trajectories,
-            all_forecaster_samples,
-            config,
-            color_by_growth_type=False,
-            forecaster_filter=[forecaster_name],
-        )
+        # fig_combined_red, _ = plot_combined_trajectories(
+        #     all_forecaster_backcast_trajectories,
+        #     all_forecaster_trajectories,
+        #     all_forecaster_samples,
+        #     config,
+        #     color_by_growth_type=False,
+        #     forecaster_filter=[forecaster_name],
+        # )
 
         # Save and close the month-independent figures
         fig_backcasted_colored.savefig(
@@ -773,42 +870,58 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             dpi=300,
             bbox_inches="tight",
         )
-        fig_combined_colored.savefig(
-            combined_dir / f"combined_trajectories_{forecaster_name}.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-        fig_combined_red.savefig(
-            combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
+        # # Commented out: saving unconditional combined trajectories
+        # fig_combined_colored.savefig(
+        #     combined_dir / f"combined_trajectories_{forecaster_name}.png",
+        #     dpi=300,
+        #     bbox_inches="tight",
+        # )
+        # # Also save unconditional all trajectories to central_trajectories folder
+        # fig_combined_colored.savefig(
+        #     central_dir / f"all_trajectories_unconditional_{forecaster_name}.png",
+        #     dpi=300,
+        #     bbox_inches="tight",
+        # )
+        # fig_combined_red.savefig(
+        #     combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
+        #     dpi=300,
+        #     bbox_inches="tight",
+        # )
 
         plt.close(fig_backcasted_colored)
         plt.close(fig_backcasted_red)
-        plt.close(fig_combined_colored)
-        plt.close(fig_combined_red)
+        # plt.close(fig_combined_colored)
+        # plt.close(fig_combined_red)
 
         # --- Figures filtered by specific SC arrival months ---
         target_months = [
-            # March targets
+            "November 2026",
+            "January 2027",
             "March 2027",
-            "March 2028",
-            "March 2029",
-            "March 2030",
-            # September targets
-            "September 2027",
+            "April 2027",
+            "May 2027",
+            "June 2027",
+            "August 2027",
+            "May 2028",
+            "July 2028",
             "September 2028",
-            "September 2029",
-            "September 2030",
+            "April 2029",
+            "November 2029",
+            "January 2030",
+            # "March 2028",
+            # "March 2029",
+            # "March 2030",
+            # "September 2027",
+            # "September 2029",
+            # "September 2030",
         ]
 
         # Collect central trajectories per month for later comparison
         central_trajs_by_month: dict[str, dict] = {}
 
-        # Add the unconditional central trajectory
-        if unconditional_central_path is not None:
-            central_trajs_by_month["Unconditional"] = unconditional_central_path
+        # # Commented out: Add the unconditional central trajectory
+        # if unconditional_central_path is not None:
+        #     central_trajs_by_month["Unconditional"] = unconditional_central_path
 
         for sc_month_str in target_months:
             month_slug = sc_month_str.lower().replace(" ", "_")  # e.g. "march_2028"
@@ -865,17 +978,13 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
 
             # --- Save the month-specific figures ---
             fig_trajectories.savefig(
-                output_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
+                forecasted_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
+            # Save all_trajectories to central_trajectories folder
             fig_combined_month.savefig(
-                combined_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
-                dpi=300,
-                bbox_inches="tight",
-            )
-            fig_combined_month_median.savefig(
-                combined_dir / f"combined_trajectories_{month_slug}_median_{forecaster_name}.png",
+                central_dir / f"all_trajectories_{month_slug}_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -913,12 +1022,82 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             plt.close(fig_cent_compare)
         print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
 
+    # --------------------------------------------------------
+    # Plot median params vs central trajectories comparison
+    # Dynamically determine filter months based on median SC arrival times
+    # This is plotted FIRST (after per-forecaster plots) for visibility
+    # --------------------------------------------------------
+    # Detect forecaster naming pattern: look for patched vs non-patched variants
+    forecaster_names_list = list(all_forecaster_results.keys())
+
+    # Check if we're using patched rd speedup variants
+    has_patched = any("patched_rd_speedup" in name.lower() for name in forecaster_names_list)
+
+    if has_patched:
+        # Use patched variant naming
+        base_name = "Eli_patched_rd_speedup"
+        superexp_forecaster = "Eli_superexp_only_patched_rd_speedup"
+        exp_forecaster = "Eli_exp_only_patched_rd_speedup"
+        mixed_forecaster = "Eli_patched_rd_speedup"
+        plot_title = "Backcasts with AI R&D interpolation fixed (Eli's distributions)"
+    else:
+        # Use original naming
+        base_name = "Eli"
+        superexp_forecaster = "Eli_superexp_only"
+        exp_forecaster = "Eli_exp_only"
+        mixed_forecaster = "Eli"
+        plot_title = "Trajectory with Median Parameters vs Central Trajectories (Eli's distributions)"
+
+    # Fixed median SC arrival months for Eli patched_rd_speedup forecasters
+    if has_patched:
+        superexp_month = "April 2027"
+        exp_month = "April 2029"
+        mixed_month = "May 2028"
+    else:
+        superexp_month = "November 2026"
+        exp_month = "July 2028"
+        mixed_month = "August 2027"
+
+    print(f"Using SC arrival months: superexp={superexp_month}, exp={exp_month}, mixed={mixed_month}")
+
+    fig_median_vs_central = plot_median_vs_central_comparison(
+        median_trajectory_data,
+        monthly_central_trajectories_by_forecaster,
+        config,
+        forecaster_name="Eli",
+        superexp_forecaster_name=superexp_forecaster,
+        exp_forecaster_name=exp_forecaster,
+        mixed_forecaster_name=mixed_forecaster,
+        superexp_sc_month=superexp_month,
+        exp_sc_month=exp_month,
+        mixed_sc_month=mixed_month,
+        overlay_external_data=True,
+        title=plot_title,
+    )
+    fig_median_vs_central.savefig(
+        central_dir / f"median_vs_central_comparison_{base_name}.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close(fig_median_vs_central)
+    print("Saved median vs central comparison plot to central_trajectories folder")
+
     for sc_month_str in target_months:
+        # Build list of trajectories for forecasters that have data for this month
+        monthly_trajs = [
+            (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
+            for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+            if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
+        ]
+        if not monthly_trajs:
+            print(f"Skipping {sc_month_str} comparison plot - no forecasters have data for this month")
+            continue
         fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
-            [(forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str]) for forecaster_name in monthly_central_trajectories_by_forecaster.keys()],
+            monthly_trajs,
             config,
             overlay_external_data=True,
             title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
+            sc_month_str=sc_month_str,
         )
         fig_cent_forecaster_comparison_month.savefig(
             central_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
@@ -927,7 +1106,116 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         )
         plt.close(fig_cent_forecaster_comparison_month)
 
-    return fig, all_forecaster_results, monthly_central_trajectories_by_forecaster
+    # # Commented out: Compare unconditional central trajectories across forecasters
+    # unconditional_central_trajs = [
+    #     (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name]["Unconditional"])
+    #     for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+    #     if "Unconditional" in monthly_central_trajectories_by_forecaster[forecaster_name]
+    # ]
+    # if unconditional_central_trajs:
+    #     fig_unconditional_comparison = plot_central_trajectories_comparison(
+    #         unconditional_central_trajs,
+    #         config,
+    #         overlay_external_data=True,
+    #         title="Time Horizon Extension Central Trajectories – Unconditional",
+    #     )
+    #     fig_unconditional_comparison.savefig(
+    #         central_dir / f"forecaster_comparison_unconditional_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+    #         dpi=300,
+    #         bbox_inches="tight",
+    #     )
+    #     plt.close(fig_unconditional_comparison)
+
+    # --------------------------------------------------------
+    # Create separate plots for Nov 2026 and Jan 2027 with parameters
+    # --------------------------------------------------------
+    for key_month in ["November 2026", "January 2027"]:
+        key_month_trajs = []
+        for forecaster_name in monthly_central_trajectories_by_forecaster.keys():
+            if key_month in monthly_central_trajectories_by_forecaster[forecaster_name]:
+                traj = monthly_central_trajectories_by_forecaster[forecaster_name][key_month]
+                key_month_trajs.append((forecaster_name, traj))
+        if key_month_trajs:
+            month_slug = key_month.lower().replace(" ", "_")
+            fig_key_month = plot_central_trajectories_comparison(
+                key_month_trajs,
+                config,
+                overlay_external_data=True,
+                title=f"Central Trajectories – {key_month} (with parameters)",
+                sc_month_str=key_month,
+                show_params_in_legend=True,
+            )
+            fig_key_month.savefig(
+                central_dir / f"forecaster_comparison_{month_slug}_with_params.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close(fig_key_month)
+
+    # --------------------------------------------------------
+    # Get median parameter trajectories for pure growth type forecasters
+    # (trajectories already computed by run_median_trajectory earlier)
+    # --------------------------------------------------------
+    median_param_trajectories = {}  # forecaster_name -> (trajectory, growth_type)
+    for forecaster_name in all_forecaster_samples.keys():
+        samples = all_forecaster_samples[forecaster_name]
+        growth_type = get_forecaster_growth_type(samples)
+        if growth_type is not None and forecaster_name in median_trajectory_data:
+            traj_data = median_trajectory_data[forecaster_name]
+            if growth_type in traj_data:
+                print(f"Using pre-computed median trajectory for {forecaster_name} ({growth_type})")
+                median_param_trajectories[forecaster_name] = (traj_data[growth_type], growth_type)
+
+    # Create versions of central trajectory comparison plots with median param trajectories
+    if median_param_trajectories:
+        # Build list of median trajectories for plotting
+        median_trajs_list = [
+            (forecaster_name, traj, growth_type)
+            for forecaster_name, (traj, growth_type) in median_param_trajectories.items()
+        ]
+
+        # Monthly comparisons with median trajectories
+        for sc_month_str in target_months:
+            # Build list of trajectories for forecasters that have data for this month
+            monthly_trajs_median = [
+                (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
+                for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+                if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
+            ]
+            if not monthly_trajs_median:
+                continue
+            fig_with_median = plot_central_trajectories_comparison(
+                monthly_trajs_median,
+                config,
+                overlay_external_data=True,
+                title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals (with Median Params)",
+                median_trajectories=median_trajs_list,
+                sc_month_str=sc_month_str,
+            )
+            fig_with_median.savefig(
+                central_dir / f"forecaster_comparison_{sc_month_str}_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close(fig_with_median)
+
+        # # Commented out: Unconditional comparison with median trajectories
+        # if unconditional_central_trajs:
+        #     fig_unconditional_with_median = plot_central_trajectories_comparison(
+        #         unconditional_central_trajs,
+        #         config,
+        #         overlay_external_data=True,
+        #         title="Time Horizon Extension Central Trajectories – Unconditional (with Median Params)",
+        #         median_trajectories=median_trajs_list,
+        #     )
+        #     fig_unconditional_with_median.savefig(
+        #         central_dir / f"forecaster_comparison_unconditional_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+        #         dpi=300,
+        #         bbox_inches="tight",
+        #     )
+        #     plt.close(fig_unconditional_with_median)
+
+    return fig, all_forecaster_results, monthly_central_trajectories_by_forecaster, median_trajectory_data
 
 # NEW TOP-LEVEL FUNCTIONS FOR FORECASTER INHERITANCE
 
@@ -997,9 +1285,11 @@ def regenerate_plots(output_dir: str | Path):
     combined_dir = output_dir / "combined_trajectories"
     backcasted_dir = output_dir / "backcasted_trajectories"
     central_dir = output_dir / "central_trajectories"
+    forecasted_dir = output_dir / "forecasted_trajectories"
     combined_dir.mkdir(exist_ok=True)
     backcasted_dir.mkdir(exist_ok=True)
     central_dir.mkdir(exist_ok=True)
+    forecasted_dir.mkdir(exist_ok=True)
 
     # Load trajectory data
     with open(output_dir / "trajectory_data.pkl", "rb") as f:
@@ -1048,24 +1338,25 @@ def regenerate_plots(output_dir: str | Path):
             forecaster_filter=[forecaster_name],
         )
 
-        fig_combined_colored, unconditional_central_path = plot_combined_trajectories(
-            all_forecaster_backcast_trajectories,
-            all_forecaster_trajectories,
-            all_forecaster_samples,
-            config,
-            color_by_growth_type=True,
-            plot_median_curve=True,
-            forecaster_filter=[forecaster_name],
-        )
+        # # Commented out: unconditional combined trajectories
+        # fig_combined_colored, unconditional_central_path = plot_combined_trajectories(
+        #     all_forecaster_backcast_trajectories,
+        #     all_forecaster_trajectories,
+        #     all_forecaster_samples,
+        #     config,
+        #     color_by_growth_type=True,
+        #     plot_median_curve=True,
+        #     forecaster_filter=[forecaster_name],
+        # )
 
-        fig_combined_red, _ = plot_combined_trajectories(
-            all_forecaster_backcast_trajectories,
-            all_forecaster_trajectories,
-            all_forecaster_samples,
-            config,
-            color_by_growth_type=False,
-            forecaster_filter=[forecaster_name],
-        )
+        # fig_combined_red, _ = plot_combined_trajectories(
+        #     all_forecaster_backcast_trajectories,
+        #     all_forecaster_trajectories,
+        #     all_forecaster_samples,
+        #     config,
+        #     color_by_growth_type=False,
+        #     forecaster_filter=[forecaster_name],
+        # )
 
         # Save and close the month-independent figures
         fig_backcasted_colored.savefig(
@@ -1078,40 +1369,58 @@ def regenerate_plots(output_dir: str | Path):
             dpi=300,
             bbox_inches="tight",
         )
-        fig_combined_colored.savefig(
-            combined_dir / f"combined_trajectories_{forecaster_name}.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-        fig_combined_red.savefig(
-            combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
+        # # Commented out: saving unconditional combined trajectories
+        # fig_combined_colored.savefig(
+        #     combined_dir / f"combined_trajectories_{forecaster_name}.png",
+        #     dpi=300,
+        #     bbox_inches="tight",
+        # )
+        # # Also save unconditional all trajectories to central_trajectories folder
+        # fig_combined_colored.savefig(
+        #     central_dir / f"all_trajectories_unconditional_{forecaster_name}.png",
+        #     dpi=300,
+        #     bbox_inches="tight",
+        # )
+        # fig_combined_red.savefig(
+        #     combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
+        #     dpi=300,
+        #     bbox_inches="tight",
+        # )
 
         plt.close(fig_backcasted_colored)
         plt.close(fig_backcasted_red)
-        plt.close(fig_combined_colored)
-        plt.close(fig_combined_red)
+        # plt.close(fig_combined_colored)
+        # plt.close(fig_combined_red)
 
         # --- Figures filtered by specific SC arrival months ---
         target_months = [
+            "November 2026",
+            "January 2027",
             "March 2027",
-            "March 2028",
-            "March 2029",
-            "March 2030",
-            "September 2027",
+            "April 2027",
+            "May 2027",
+            "June 2027",
+            "August 2027",
+            "May 2028",
+            "July 2028",
             "September 2028",
-            "September 2029",
-            "September 2030",
+            "April 2029",
+            "November 2029",
+            "January 2030",
+            # "March 2028",
+            # "March 2029",
+            # "March 2030",
+            # "September 2027",
+            # "September 2029",
+            # "September 2030",
         ]
 
         # Collect central trajectories per month for later comparison
         central_trajs_by_month: dict[str, dict] = {}
 
-        # Add the unconditional central trajectory
-        if unconditional_central_path is not None:
-            central_trajs_by_month["Unconditional"] = unconditional_central_path
+        # # Commented out: Add the unconditional central trajectory
+        # if unconditional_central_path is not None:
+        #     central_trajs_by_month["Unconditional"] = unconditional_central_path
 
         for sc_month_str in target_months:
             month_slug = sc_month_str.lower().replace(" ", "_")
@@ -1164,12 +1473,18 @@ def regenerate_plots(output_dir: str | Path):
             )
 
             fig_trajectories.savefig(
-                output_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
+                forecasted_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
             fig_combined_month.savefig(
                 combined_dir / f"combined_trajectories_{month_slug}_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            # Also save to central_trajectories folder for easy access
+            fig_combined_month.savefig(
+                central_dir / f"all_trajectories_{month_slug}_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
@@ -1208,13 +1523,82 @@ def regenerate_plots(output_dir: str | Path):
             plt.close(fig_cent_compare)
         print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
 
+    # --------------------------------------------------------
+    # Plot median params vs central trajectories comparison
+    # Dynamically determine filter months based on median SC arrival times
+    # This is plotted FIRST (after per-forecaster plots) for visibility
+    # --------------------------------------------------------
+    # Detect forecaster naming pattern: look for patched vs non-patched variants
+    forecaster_names_list = list(all_forecaster_results.keys())
+
+    # Check if we're using patched rd speedup variants
+    has_patched = any("patched_rd_speedup" in name.lower() for name in forecaster_names_list)
+
+    if has_patched:
+        # Use patched variant naming
+        base_name = "Eli_patched_rd_speedup"
+        superexp_forecaster = "Eli_superexp_only_patched_rd_speedup"
+        exp_forecaster = "Eli_exp_only_patched_rd_speedup"
+        mixed_forecaster = "Eli_patched_rd_speedup"
+        plot_title = "Backcasts with AI R&D interpolation fixed (Eli's distributions)"
+    else:
+        # Use original naming
+        base_name = "Eli"
+        superexp_forecaster = "Eli_superexp_only"
+        exp_forecaster = "Eli_exp_only"
+        mixed_forecaster = "Eli"
+        plot_title = "Trajectory with Median Parameters vs Central Trajectories (Eli's distributions)"
+
+    # Fixed median SC arrival months for Eli patched_rd_speedup forecasters
+    if has_patched:
+        superexp_month = "April 2027"
+        exp_month = "April 2029"
+        mixed_month = "May 2028"
+    else:
+        superexp_month = "November 2026"
+        exp_month = "July 2028"
+        mixed_month = "August 2027"
+
+    print(f"Using SC arrival months: superexp={superexp_month}, exp={exp_month}, mixed={mixed_month}")
+
+    fig_median_vs_central = plot_median_vs_central_comparison(
+        median_trajectory_data,
+        monthly_central_trajectories_by_forecaster,
+        config,
+        forecaster_name="Eli",
+        superexp_forecaster_name=superexp_forecaster,
+        exp_forecaster_name=exp_forecaster,
+        mixed_forecaster_name=mixed_forecaster,
+        superexp_sc_month=superexp_month,
+        exp_sc_month=exp_month,
+        mixed_sc_month=mixed_month,
+        overlay_external_data=True,
+        title=plot_title,
+    )
+    fig_median_vs_central.savefig(
+        central_dir / f"median_vs_central_comparison_{base_name}.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close(fig_median_vs_central)
+    print("Saved median vs central comparison plot to central_trajectories folder")
+
     for sc_month_str in target_months:
+        # Build list of trajectories for forecasters that have data for this month
+        monthly_trajs = [
+            (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
+            for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+            if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
+        ]
+        if not monthly_trajs:
+            print(f"Skipping {sc_month_str} comparison plot - no forecasters have data for this month")
+            continue
         fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
-            [(forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
-             for forecaster_name in monthly_central_trajectories_by_forecaster.keys()],
+            monthly_trajs,
             config,
             overlay_external_data=True,
             title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
+            sc_month_str=sc_month_str,
         )
         fig_cent_forecaster_comparison_month.savefig(
             central_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
@@ -1222,6 +1606,123 @@ def regenerate_plots(output_dir: str | Path):
             bbox_inches="tight",
         )
         plt.close(fig_cent_forecaster_comparison_month)
+
+    # # Commented out: Compare unconditional central trajectories across forecasters
+    # unconditional_central_trajs = [
+    #     (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name]["Unconditional"])
+    #     for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+    #     if "Unconditional" in monthly_central_trajectories_by_forecaster[forecaster_name]
+    # ]
+    # if unconditional_central_trajs:
+    #     fig_unconditional_comparison = plot_central_trajectories_comparison(
+    #         unconditional_central_trajs,
+    #         config,
+    #         overlay_external_data=True,
+    #         title="Time Horizon Extension Central Trajectories – Unconditional",
+    #     )
+    #     fig_unconditional_comparison.savefig(
+    #         central_dir / f"forecaster_comparison_unconditional_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+    #         dpi=300,
+    #         bbox_inches="tight",
+    #     )
+    #     plt.close(fig_unconditional_comparison)
+
+    # --------------------------------------------------------
+    # Create separate plots for Nov 2026 and Jan 2027 with parameters
+    # --------------------------------------------------------
+    for key_month in ["November 2026", "January 2027"]:
+        key_month_trajs = []
+        for forecaster_name in monthly_central_trajectories_by_forecaster.keys():
+            if key_month in monthly_central_trajectories_by_forecaster[forecaster_name]:
+                traj = monthly_central_trajectories_by_forecaster[forecaster_name][key_month]
+                key_month_trajs.append((forecaster_name, traj))
+        if key_month_trajs:
+            month_slug = key_month.lower().replace(" ", "_")
+            fig_key_month = plot_central_trajectories_comparison(
+                key_month_trajs,
+                config,
+                overlay_external_data=True,
+                title=f"Central Trajectories – {key_month} (with parameters)",
+                sc_month_str=key_month,
+                show_params_in_legend=True,
+            )
+            fig_key_month.savefig(
+                central_dir / f"forecaster_comparison_{month_slug}_with_params.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close(fig_key_month)
+
+    # --------------------------------------------------------
+    # Compute median parameter trajectories for pure growth type forecasters
+    # --------------------------------------------------------
+    print("\nComputing median trajectories for pure growth type forecasters...")
+    median_trajectory_data = {}  # forecaster_name -> {growth_type: trajectory_dict}
+    for _, forecaster_config in config["forecasters"].items():
+        forecaster_name = forecaster_config["name"]
+        if forecaster_name not in all_forecaster_samples:
+            continue
+        _, traj_data = run_median_trajectory(config, forecaster_config, forecaster_name)
+        median_trajectory_data[forecaster_name] = traj_data
+
+    median_param_trajectories = {}  # forecaster_name -> (trajectory, growth_type)
+    for forecaster_name in all_forecaster_samples.keys():
+        samples = all_forecaster_samples[forecaster_name]
+        growth_type = get_forecaster_growth_type(samples)
+        if growth_type is not None and forecaster_name in median_trajectory_data:
+            traj_data = median_trajectory_data[forecaster_name]
+            if growth_type in traj_data:
+                print(f"Using median trajectory for {forecaster_name} ({growth_type})")
+                median_param_trajectories[forecaster_name] = (traj_data[growth_type], growth_type)
+
+    # Create versions of central trajectory comparison plots with median param trajectories
+    if median_param_trajectories:
+        # Build list of median trajectories for plotting
+        median_trajs_list = [
+            (forecaster_name, traj, growth_type)
+            for forecaster_name, (traj, growth_type) in median_param_trajectories.items()
+        ]
+
+        # Monthly comparisons with median trajectories
+        for sc_month_str in target_months:
+            # Build list of trajectories for forecasters that have data for this month
+            monthly_trajs_median = [
+                (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
+                for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+                if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
+            ]
+            if not monthly_trajs_median:
+                continue
+            fig_with_median = plot_central_trajectories_comparison(
+                monthly_trajs_median,
+                config,
+                overlay_external_data=True,
+                title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals (with Median Params)",
+                median_trajectories=median_trajs_list,
+                sc_month_str=sc_month_str,
+            )
+            fig_with_median.savefig(
+                central_dir / f"forecaster_comparison_{sc_month_str}_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close(fig_with_median)
+
+        # # Commented out: Unconditional comparison with median trajectories
+        # if unconditional_central_trajs:
+        #     fig_unconditional_with_median = plot_central_trajectories_comparison(
+        #         unconditional_central_trajs,
+        #         config,
+        #         overlay_external_data=True,
+        #         title="Time Horizon Extension Central Trajectories – Unconditional (with Median Params)",
+        #         median_trajectories=median_trajs_list,
+        #     )
+        #     fig_unconditional_with_median.savefig(
+        #         central_dir / f"forecaster_comparison_unconditional_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+        #         dpi=300,
+        #         bbox_inches="tight",
+        #     )
+        #     plt.close(fig_unconditional_with_median)
 
     print(f"\nPlot regeneration completed. Files saved to {output_dir}")
 
@@ -1239,6 +1740,7 @@ if __name__ == "__main__":
     else:
         # Run with closed-form solution (faster)
         print("=== Running with closed-form solution ===")
-        run_simple_sc_simulation()
+        config_path = sys.argv[1] if len(sys.argv) > 1 else "simple_params.yaml"
+        run_simple_sc_simulation(config_path)
 
     print(f"\nCompleted at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 

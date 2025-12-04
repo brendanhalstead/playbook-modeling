@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 5     # Number of Monte Carlo simulation runs, set to 5000 for full run
+  n_sims: 5000     # Number of Monte Carlo simulation runs, set to 5000 for full run
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
@@ -51,8 +51,8 @@ forecasters:
       sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
       se_doubling_decay_fraction_ci: [0.03, 0.3]  # r0% CI for fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-  eli_may_update_plus_patched_rd_speedup:
-    name: "Eli_may_update_plus_patched_rd_speedup"
+  patched_rd_speedup:
+    name: "Patched_rd_speedup"
     color: "#003000"  
     compute_schedule: [[2028, 0.9], [2029, 0.5], [2030, 0.4], [2031, 0.3]]  # List of [year, rate] pairs
     labor_growth_schedule: [[2025, 0.5], [2028, 0.4], [2029, 0.2], [2030, 0.15], [2031, 0.1]]  # List of [year, rate] pairs for annual labor growth

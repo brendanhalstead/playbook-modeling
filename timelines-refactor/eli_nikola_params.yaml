@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 5000   # Number of Monte Carlo simulation runs
+  n_sims: 5   # Number of Monte Carlo simulation runs
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
@@ -43,20 +43,28 @@ forecasters:
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
       patch_rd_speedup: False
-  eli_exp_only:
-    name: "Eli_exp_only"
-    color: "#003000"
+  nikola:
+    name: "Nikola"
+    color: "#000000"
     parent: "eli"
     distributions:
-      p_superexponential: 0.0  # Probability of superexponential growth
-      p_subexponential: 0.0
-  eli_superexp_only:
-    name: "Eli_superexp_only"
-    color: "#0000AA"
-    parent: "eli"
-    distributions:
-      p_superexponential: 1.0  # Probability of superexponential growth
-      p_subexponential: 0.0
+      h_SC_ci: [0.1, 24]  # Months needed for SC
+      SC_prog_multiplier_ci: [1.0, 20.0]  # Progress multiplier at SC - 1
+      p_superexponential: 0.4  # Probability of superexponential growth
+  # eli_exp_only:
+  #   name: "Eli_exp_only"
+  #   color: "#003000"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 0.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
+  # eli_superexp_only:
+  #   name: "Eli_superexp_only"
+  #   color: "#0000AA"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 1.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
   # eli_patched_rd_speedup:
   #   name: "Eli_patched_rd_speedup"
   #   color: "#900000"
@@ -151,16 +159,6 @@ forecasters:
   #   distributions:
   #     p_superexponential: 1.0
   #     p_subexponential: 0.0
-  
-  
-  # nikola:
-  #   name: "Nikola"
-  #   color: "#000000"
-  #   parent: "eli"
-  #   distributions:
-  #     h_SC_ci: [0.1, 24]  # Months needed for SC
-  #     SC_prog_multiplier_ci: [1.0, 20.0]  # Progress multiplier at SC - 1
-  #     p_superexponential: 0.4  # Probability of superexponential growth
   # nikola_patched_rd_speedup:
   #   name: "Nikola_patched_rd_speedup"
   #   color: "#000030"

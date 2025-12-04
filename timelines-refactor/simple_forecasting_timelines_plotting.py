@@ -12,6 +12,37 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
+
+# Global variable to control which disclaimer variant to use
+_disclaimer_variant = "original"  # "original" or "may"
+
+def set_disclaimer_variant(variant: str) -> None:
+    """Set the disclaimer variant to use. Options: 'original' or 'may'."""
+    global _disclaimer_variant
+    _disclaimer_variant = variant
+
+def add_disclaimer(fig: plt.Figure) -> None:
+    """Add disclaimer text at the bottom of a figure."""
+    if _disclaimer_variant == "may":
+        disclaimer_text = (
+            "This plot was generated using a revised version of our AI 2027 timelines model that we published in May 2025. "
+            "Since then, we have created an improved model, which predicts somewhat longer timelines."
+        )
+    else:
+        disclaimer_text = (
+            "This plot was generated using the timelines model that was released alongside AI 2027. "
+            "Since then, we have created an improved model, which predicts longer timelines."
+        )
+    fig.text(
+        0.5, 0.02, disclaimer_text,
+        ha='center', va='bottom',
+        fontsize=11, color='red',
+        wrap=True,
+        transform=fig.transFigure
+    )
+    # Adjust bottom margin to make room for the disclaimer
+    fig.subplots_adjust(bottom=0.15)
+
 def load_external_data(yaml_path: str = "../external/benchmark_results.yaml") -> pd.DataFrame:
     """Load external METR benchmark data points for overlay on plots."""
     if not Path(yaml_path).exists():
@@ -73,15 +104,15 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     """Create plot showing results from all forecasters."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
-    
+
     # Set monospace font
     font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
     plt.rcParams['font.family'] = font_family
-    
-    fig = plt.figure(figsize=(10, 6), dpi=150, facecolor=bg_rgb)
+
+    fig = plt.figure(figsize=(10, 8), dpi=150, facecolor=bg_rgb)
     ax = fig.add_subplot(111)
     ax.set_facecolor(bg_rgb)
-    
+
     # Get current year for x-axis range
     current_year = 2025.25
     # current_year = datetime.now().year
@@ -132,7 +163,6 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     # Configure plot
     ax.set_title("Superhuman Coder Arrival, Time Horizon Extension",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Probability Density", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     
     # Set axis properties
@@ -154,11 +184,12 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
-    
+
+    add_disclaimer(fig)
     return fig
 
 
-def plot_results_cdf(all_forecaster_results: dict, config: dict) -> plt.Figure:
+def plot_results_cdf(all_forecaster_results: dict, config: dict, *, show_percentile_lines: bool = True) -> plt.Figure:
     """Create CDF plot showing cumulative distribution of SC arrival times."""
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
@@ -167,7 +198,7 @@ def plot_results_cdf(all_forecaster_results: dict, config: dict) -> plt.Figure:
     font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
     plt.rcParams['font.family'] = font_family
 
-    fig = plt.figure(figsize=(10, 6), dpi=150, facecolor=bg_rgb)
+    fig = plt.figure(figsize=(10, 8), dpi=150, facecolor=bg_rgb)
     ax = fig.add_subplot(111)
     ax.set_facecolor(bg_rgb)
 
@@ -195,7 +226,6 @@ def plot_results_cdf(all_forecaster_results: dict, config: dict) -> plt.Figure:
     # Configure plot
     ax.set_title("Superhuman Coder Arrival CDF, Time Horizon Extension",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Cumulative Probability", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     # Set axis properties
@@ -204,8 +234,9 @@ def plot_results_cdf(all_forecaster_results: dict, config: dict) -> plt.Figure:
     ax.set_ylim(0, 1)
 
     # Add horizontal reference lines at key percentiles
-    for pct in [0.1, 0.5, 0.9]:
-        ax.axhline(y=pct, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+    if show_percentile_lines:
+        for pct in [0.1, 0.5, 0.9]:
+            ax.axhline(y=pct, color='gray', linestyle=':', alpha=0.5, linewidth=1)
 
     # Grid and spines
     ax.grid(True, alpha=0.2, zorder=0)
@@ -222,6 +253,7 @@ def plot_results_cdf(all_forecaster_results: dict, config: dict) -> plt.Figure:
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
 
+    add_disclaimer(fig)
     return fig
 
 
@@ -339,7 +371,6 @@ def plot_trajectories_sc_month(
     # Title & axes labels
     ax.set_title(f"Time Horizon Extension Trajectories for Runs Reaching SC in {sc_month_str}",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
@@ -420,6 +451,7 @@ def plot_trajectories_sc_month(
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
 
+    add_disclaimer(fig)
     return fig
 
 def plot_combined_trajectories_sc_month(
@@ -530,7 +562,12 @@ def plot_combined_trajectories_sc_month(
                 combined_h.extend(fh)
             if combined_t:
                 order = np.argsort(combined_t)
-                all_combined_paths.append({'times': np.array(combined_t)[order], 'horizons': np.array(combined_h)[order]})
+                all_combined_paths.append({
+                    'times': np.array(combined_t)[order],
+                    'horizons': np.array(combined_h)[order],
+                    'forecaster_name': name,
+                    'sample_idx': idx,
+                })
 
     print(f"Total {sc_month_str} combined trajectories plotted: {total_trajectories_plotted}")
 
@@ -550,8 +587,14 @@ def plot_combined_trajectories_sc_month(
                 ax.scatter(visible['release_year_decimal'], visible['p80'], color='black', s=25, alpha=0.8, zorder=15, marker='o', label='External Benchmarks (p80)')
 
     # titles & axes
-    ax.set_title(f"Complete Time Horizon Extension Trajectories – {sc_month_str} SC Arrivals", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    # Determine title based on forecaster name
+    active_forecaster = forecaster_filter[0] if forecaster_filter and len(forecaster_filter) == 1 else None
+    if active_forecaster == "Eli_patched_rd_speedup":
+        plot_title = "Comparing Bug-Fixed Model Trajectories to Graph Curves"
+    else:
+        plot_title = "Comparing Model Trajectories to Graph Curves"
+    plot_subtitle = f"(Filtered for {sc_month_str} SC Arrivals)"
+    ax.set_title(f"{plot_title}\n{plot_subtitle}", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
@@ -611,10 +654,22 @@ def plot_combined_trajectories_sc_month(
         if plot_median_curve and valid.any():
             ax.plot(x_grid[valid], 10**median_curve[valid], color='red', linewidth=2, linestyle=':', label='Median Trajectory', zorder=49)
         if valid.any():
-            distances = np.nansum(np.abs(matrix - median_curve), axis=1)
+            # Only sum distances from 2025.25 (forecast start) up to the end of the SC month filter
+            time_mask = (x_grid >= 2025.25) & (x_grid <= month_end)
+            matrix_truncated = matrix[:, time_mask]
+            median_truncated = median_curve[time_mask]
+            distances = np.nansum(np.abs(matrix_truncated - median_truncated), axis=1)
             best_idx = np.nanargmin(distances)
             best_path = all_combined_paths[int(best_idx)]
-            ax.plot(best_path['times'], best_path['horizons'], color='green', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+
+            # Add sample parameters to best_path for downstream use
+            forecaster_name = best_path.get('forecaster_name')
+            sample_idx = best_path.get('sample_idx')
+            if forecaster_name is not None and sample_idx is not None and forecaster_name in all_forecaster_samples:
+                samples = all_forecaster_samples[forecaster_name]
+                best_path['cost_speed'] = float(samples['cost_speed'][sample_idx])
+                best_path['announcement_delay'] = float(samples['announcement_delay'][sample_idx])
 
             # -----------------------------------------------------------------
             # Add labelled check-points on the median trajectory (if requested)
@@ -647,21 +702,9 @@ def plot_combined_trajectories_sc_month(
                 mask = (original_df['year'] >= x_min) & (original_df['year'] <= x_max)
                 if mask.any():
                     ax.plot(original_df.loc[mask, 'year'], original_df.loc[mask, 'horizon_minutes'],
-                            color='black', linewidth=2, alpha=0.7)
+                            color='green', linewidth=2, linestyle='--')
             except Exception as e:
                 print(f"Warning: failed to plot original illustrative trend: {e}")
-
-        # Mistaken illustrative graph trend (y-doubling model)
-        wrong_qty_trend_path = Path("../external/illustrative_se_trend_generated.csv")
-        if wrong_qty_trend_path.exists():
-            try:
-                wrong_qty_df = pd.read_csv(wrong_qty_trend_path)
-                mask = (wrong_qty_df['year'] >= x_min) & (wrong_qty_df['year'] <= x_max)
-                if mask.any():
-                    ax.plot(wrong_qty_df.loc[mask, 'year'], wrong_qty_df.loc[mask, 'horizon_minutes'],
-                            color='gray', linewidth=2, alpha=0.5, linestyle=':')
-            except Exception as e:
-                print(f"Warning: failed to plot wrong-qty illustrative trend: {e}")
 
         # Fixed illustrative graph trend (horizon-doubling model)
         fixed_trend_path = Path("../external/fixed_illustrative_graph_trend.csv")
@@ -671,7 +714,7 @@ def plot_combined_trajectories_sc_month(
                 mask = (fixed_df['year'] >= x_min) & (fixed_df['year'] <= x_max)
                 if mask.any():
                     ax.plot(fixed_df.loc[mask, 'year'], fixed_df.loc[mask, 'horizon_minutes'],
-                            color='darkblue', linewidth=2, alpha=0.7, linestyle='--')
+                            color='blue', linewidth=2, linestyle='--')
             except Exception as e:
                 print(f"Warning: failed to plot fixed illustrative trend: {e}")
 
@@ -680,34 +723,34 @@ def plot_combined_trajectories_sc_month(
     # -------------------------------------------------------------
     from matplotlib.lines import Line2D
     legend_elements = [
-        Line2D([0], [0], color='gray', linestyle=':', linewidth=3, label='Current Horizon (15 min)'),
-        Line2D([0], [0], color='gray', linestyle=':', linewidth=2, label='Current Time'),
         Line2D([0], [0], color='purple', linestyle=':', linewidth=2, label=f'{sc_month_str} (SC Arrival)'),
-        Line2D([0], [0], color='green', linewidth=2, linestyle='--', label='Central Trajectory'),
     ]
 
-    if color_by_growth_type:
-        legend_elements.extend([
-            Line2D([0], [0], color='#2E8B57', linewidth=2, label='Exponential Growth'),
-            Line2D([0], [0], color='#FF6347', linewidth=2, label='Superexponential Growth'),
-            Line2D([0], [0], color='#4169E1', linewidth=2, label='Subexponential Growth')
-        ])
-    else:
-        legend_elements.append(Line2D([0], [0], color='gray', linewidth=2, label='Combined Trajectories'))
-
+    # Add METR line before growth type trajectories
     if overlay_external_data:
         external_df = load_external_data()
         if not external_df.empty:
             mask2 = (external_df['release_year_decimal'] >= x_min) & (external_df['release_year_decimal'] <= x_max)
             if external_df[mask2].shape[0] > 0:
-                legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=4, label='External Benchmarks (p80)', linestyle='None'))
+                legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=4, label='METR 80% time horizons', linestyle='None'))
+
+    if color_by_growth_type:
+        legend_elements.extend([
+            Line2D([0], [0], color='#2E8B57', linewidth=2, alpha=0.15, label='Exponential Growth Trajectories'),
+            Line2D([0], [0], color='#FF6347', linewidth=2, alpha=0.15, label='Superexponential Growth Trajectories'),
+            Line2D([0], [0], color='#4169E1', linewidth=2, alpha=0.15, label='Subexponential Growth Trajectories')
+        ])
+    else:
+        legend_elements.append(Line2D([0], [0], color='gray', linewidth=2, label='Combined Trajectories'))
+
+    # Add Central Trajectory after growth types
+    legend_elements.append(Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Central Trajectory'))
 
     if plot_median_curve:
         legend_elements.append(Line2D([0], [0], color='red', linewidth=2, linestyle=':', label='Median'))
     if overlay_illustrative_trend:
-        legend_elements.append(Line2D([0], [0], color='black', linewidth=2, label='Original illustrative graph trend'))
-        legend_elements.append(Line2D([0], [0], color='gray', linewidth=2, linestyle=':', alpha=0.5, label='Mistaken illustrative graph trend'))
-        legend_elements.append(Line2D([0], [0], color='darkblue', linewidth=2, linestyle='--', label='Intended illustrative graph trend'))
+        legend_elements.append(Line2D([0], [0], color='green', linewidth=2, linestyle='--', label='Original illustrative graph curve'))
+        legend_elements.append(Line2D([0], [0], color='blue', linewidth=2, linestyle='--', label='Intended illustrative graph curve'))
 
     legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
@@ -726,6 +769,7 @@ def plot_combined_trajectories_sc_month(
     except Exception:
         central_traj = None
 
+    add_disclaimer(fig)
     return fig, central_traj
 
 # -----------------------------------------------------------------------------
@@ -886,7 +930,6 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
     # Configure plot
     ax.set_title("Backcasted Time Horizon Trajectories\n(Historical development leading to current capabilities)",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     
     # Set axis properties
@@ -1003,12 +1046,13 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
       
     legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
     legend.set_zorder(50)
-    
+
     # Configure ticks
     ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
-    
+
+    add_disclaimer(fig)
     return fig
 
 def plot_combined_trajectories(
@@ -1122,7 +1166,9 @@ def plot_combined_trajectories(
                 order = np.argsort(combined_t)
                 all_combined_paths.append({
                     'times': np.array(combined_t)[order],
-                    'horizons': np.array(combined_h)[order]
+                    'horizons': np.array(combined_h)[order],
+                    'forecaster_name': name,
+                    'sample_idx': i,
                 })
 
             total_trajectories_plotted += 1
@@ -1155,7 +1201,6 @@ def plot_combined_trajectories(
     # Configure plot
     ax.set_title("Complete Time Horizon Extension Trajectories\n(Historical development and future projections)",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     
     # Set axis properties
@@ -1241,10 +1286,22 @@ def plot_combined_trajectories(
             ax.plot(x_grid[valid], 10**median_curve[valid], color='red', linewidth=2, linestyle=':', label='Median Trajectory', zorder=49)
 
         if valid.any():
-            distances = np.nansum(np.abs(matrix - median_curve), axis=1)
+            # Only sum distances from 2025.25 (forecast start)
+            time_mask = x_grid >= 2025.25
+            matrix_truncated = matrix[:, time_mask]
+            median_truncated = median_curve[time_mask]
+            distances = np.nansum(np.abs(matrix_truncated - median_truncated), axis=1)
             best_idx = np.nanargmin(distances)
             best_path = all_combined_paths[int(best_idx)]
-            ax.plot(best_path['times'], best_path['horizons'], color='green', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+
+            # Add sample parameters to best_path for downstream use
+            forecaster_name = best_path.get('forecaster_name')
+            sample_idx = best_path.get('sample_idx')
+            if forecaster_name is not None and sample_idx is not None and forecaster_name in all_forecaster_samples:
+                samples = all_forecaster_samples[forecaster_name]
+                best_path['cost_speed'] = float(samples['cost_speed'][sample_idx])
+                best_path['announcement_delay'] = float(samples['announcement_delay'][sample_idx])
 
             # Optional annotated checkpoints
             if add_agent_checkpoints:
@@ -1294,6 +1351,7 @@ def plot_combined_trajectories(
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
 
+    add_disclaimer(fig)
     return fig, best_path
 
 # -----------------------------------------------------------------------------
@@ -1306,6 +1364,9 @@ def plot_central_trajectories_comparison(
     *,
     overlay_external_data: bool = True,
     title: str = "Time Horizon Extension Central Trajectories Comparison",
+    median_trajectories: list[tuple[str, dict, str]] | None = None,
+    sc_month_str: str | None = None,
+    show_params_in_legend: bool = False,
 ) -> plt.Figure:
     """Plot a set of *central trajectories* on a shared figure.
 
@@ -1320,6 +1381,13 @@ def plot_central_trajectories_comparison(
         Global configuration (same structure used by other plotting helpers).
     overlay_external_data : bool, default True
         Whether to scatter external METR benchmark p80 data points.
+    median_trajectories : list[tuple[str, dict, str]] | None, default None
+        Optional list of median parameter trajectories. Each element is
+        ``(label, traj, growth_type)`` where ``growth_type`` is "exponential"
+        or "superexponential". These are plotted with dashed lines.
+    sc_month_str : str | None, default None
+        Optional SC arrival month string (e.g. "January 2027"). If provided,
+        a vertical dotted line is drawn at the end of that month.
 
     Returns
     -------
@@ -1380,7 +1448,30 @@ def plot_central_trajectories_comparison(
         times = np.asarray(traj["times"])
         horizons = np.asarray(traj["horizons"])
         color = colours[idx]
-        ax.plot(times, horizons, label=label, linewidth=1.5, color=color, alpha=0.6)
+        # Include parameters in label only if show_params_in_legend is True
+        display_label = label
+        if show_params_in_legend and 'cost_speed' in traj and 'announcement_delay' in traj:
+            cs = traj['cost_speed']
+            ad = traj['announcement_delay']
+            display_label = f"{label} (cs={cs:.1f}mo, ad={ad:.1f}mo)"
+        ax.plot(times, horizons, label=display_label, linewidth=1.5, color=color, alpha=0.6)
+
+    # ------------------------------------------------------------------
+    # Plot median parameter trajectories if provided
+    # ------------------------------------------------------------------
+    if median_trajectories:
+        # Use distinct colors for growth types
+        growth_colors = {
+            "exponential": "#2E8B57",      # SeaGreen
+            "superexponential": "#FF6347",  # Tomato
+        }
+        for label, traj, growth_type in median_trajectories:
+            if traj is not None:
+                times = np.asarray(traj["times"])
+                horizons = np.asarray(traj["horizons"])
+                color = growth_colors.get(growth_type, "gray")
+                ax.plot(times, horizons, label=f"{label} (median params)",
+                        linewidth=2.5, color=color, alpha=0.9, linestyle='--', zorder=20)
 
     # ------------------------------------------------------------------
     # Reference lines – keep in sync with other combined-plot helpers
@@ -1390,6 +1481,15 @@ def plot_central_trajectories_comparison(
                alpha=0.8, label='Current Horizon (15 min)')
     ax.axvline(x=current_year, color='blue', linestyle='--', linewidth=2,
                alpha=0.7, label='Current Time')
+
+    # SC arrival month vertical line (end of month)
+    if sc_month_str is not None:
+        try:
+            _, end_decimal, _ = _parse_month_year(sc_month_str)
+            ax.axvline(x=end_decimal, color='green', linestyle=':', linewidth=2,
+                       alpha=0.7, label=f'SC Arrival (end of {sc_month_str})')
+        except ValueError:
+            pass  # Invalid month string, skip the line
 
     # ------------------------------------------------------------------
     # Overlay external METR data if requested
@@ -1407,7 +1507,6 @@ def plot_central_trajectories_comparison(
     # Axes formatting (titles, labels, log-scale, ticks)
     # ------------------------------------------------------------------
     ax.set_title(title, fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
@@ -1453,8 +1552,9 @@ def plot_central_trajectories_comparison(
     # Legend – keep ordering clear: reference lines first, then trajectories
     # ------------------------------------------------------------------
     handles, labels = ax.get_legend_handles_labels()
-    # Ensure reference lines appear first
-    ref_order = [label for label in labels if label in ("Current Horizon (15 min)", "Current Time", "External Benchmarks (p80)")]
+    # Ensure reference lines appear first (including SC Arrival lines)
+    ref_keywords = ("Current Horizon (15 min)", "Current Time", "External Benchmarks (p80)", "SC Arrival")
+    ref_order = [label for label in labels if any(label.startswith(kw) or label == kw for kw in ref_keywords)]
     traj_order = [label for label in labels if label not in ref_order]
     ordered_labels = ref_order + traj_order
     ordered_handles = [handles[labels.index(lab)] for lab in ordered_labels]
@@ -1466,4 +1566,386 @@ def plot_central_trajectories_comparison(
     for tick in ax.get_xticklabels():
         tick.set_rotation(45)
 
+    add_disclaimer(fig)
+    return fig
+
+
+def plot_median_vs_central_comparison(
+    median_trajectory_data: dict,
+    monthly_central_trajectories_by_forecaster: dict,
+    config: dict,
+    *,
+    forecaster_name: str = "Eli",
+    superexp_forecaster_name: str | None = None,
+    exp_forecaster_name: str | None = None,
+    mixed_forecaster_name: str | None = None,
+    superexp_sc_month: str = "November 2026",
+    exp_sc_month: str = "July 2028",
+    mixed_sc_month: str | None = "August 2027",
+    overlay_external_data: bool = True,
+    show_params_in_legend: bool = False,
+    title: str | None = None,
+) -> plt.Figure:
+    """Plot comparison of median parameter trajectories vs central trajectories.
+
+    This creates a plot comparing:
+    - Median parameter trajectories (superexponential and exponential) for a forecaster
+    - Central trajectories filtered by SC arrival month
+
+    Parameters
+    ----------
+    median_trajectory_data : dict
+        Dict mapping forecaster_name -> {growth_type: trajectory_dict}
+        where trajectory_dict has 'times' and 'horizons' arrays.
+    monthly_central_trajectories_by_forecaster : dict
+        Dict mapping forecaster_name -> {sc_month_str: trajectory_dict}
+    config : dict
+        Global configuration.
+    forecaster_name : str
+        Base forecaster name for display in title (e.g., "Eli").
+    superexp_forecaster_name : str | None
+        Explicit name for the superexponential forecaster. If None, defaults to
+        "{forecaster_name}_superexp_only".
+    exp_forecaster_name : str | None
+        Explicit name for the exponential forecaster. If None, defaults to
+        "{forecaster_name}_exp_only".
+    mixed_forecaster_name : str | None
+        Explicit name for the mixed growth type forecaster. If None, defaults to
+        forecaster_name.
+    superexp_sc_month : str
+        SC arrival month for superexponential central trajectory (e.g., "November 2026").
+    exp_sc_month : str
+        SC arrival month for exponential central trajectory (e.g., "July 2028").
+    mixed_sc_month : str | None
+        SC arrival month for mixed growth central trajectory (e.g., "August 2027").
+    overlay_external_data : bool
+        Whether to overlay external benchmark data points.
+    title : str | None
+        Custom title for the plot. If None, uses default title.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    from matplotlib.lines import Line2D
+
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig = plt.figure(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+
+    # Define colors
+    superexp_color = "#FF6347"  # Tomato red
+    exp_color = "#2E8B57"       # Sea green
+    mixed_color = "#4169E1"     # Royal blue
+
+    current_year = 2025.25
+    x_min = current_year - 5
+    x_max = current_year + 5
+
+    legend_elements = []
+
+    # --- Determine forecaster names ---
+    # Use explicit names if provided, otherwise fall back to default pattern
+    superexp_forecaster = superexp_forecaster_name if superexp_forecaster_name else f"{forecaster_name}_superexp_only"
+    exp_forecaster = exp_forecaster_name if exp_forecaster_name else f"{forecaster_name}_exp_only"
+    mixed_forecaster = mixed_forecaster_name if mixed_forecaster_name else forecaster_name
+
+    # Superexponential median trajectory
+    if superexp_forecaster in median_trajectory_data:
+        traj_data = median_trajectory_data[superexp_forecaster]
+        if "superexponential" in traj_data:
+            traj = traj_data["superexponential"]
+            ax.plot(traj["times"], traj["horizons"], color=superexp_color, linewidth=2.5,
+                    linestyle='-', alpha=0.9, zorder=20, label="Superexponential (median params)")
+            legend_elements.append(
+                Line2D([0], [0], color=superexp_color, linewidth=2.5, linestyle='-',
+                       label="Superexponential (median params)")
+            )
+
+    # Exponential median trajectory
+    if exp_forecaster in median_trajectory_data:
+        traj_data = median_trajectory_data[exp_forecaster]
+        if "exponential" in traj_data:
+            traj = traj_data["exponential"]
+            ax.plot(traj["times"], traj["horizons"], color=exp_color, linewidth=2.5,
+                    linestyle='-', alpha=0.9, zorder=20, label="Exponential (median params)")
+            legend_elements.append(
+                Line2D([0], [0], color=exp_color, linewidth=2.5, linestyle='-',
+                       label="Exponential (median params)")
+            )
+
+    # --- Plot central trajectories ---
+    # Superexponential central trajectory (filtered to superexp_sc_month)
+    if superexp_forecaster in monthly_central_trajectories_by_forecaster:
+        central_by_month = monthly_central_trajectories_by_forecaster[superexp_forecaster]
+        if superexp_sc_month in central_by_month:
+            traj = central_by_month[superexp_sc_month]
+            # Parse month for abbreviated format (e.g., "November 2026" -> "Nov 2026")
+            superexp_month_abbrev = superexp_sc_month.replace("November", "Nov").replace("January", "Jan").replace("February", "Feb").replace("March", "Mar").replace("April", "Apr").replace("May", "May").replace("June", "Jun").replace("July", "Jul").replace("August", "Aug").replace("September", "Sep").replace("October", "Oct").replace("December", "Dec")
+            label = f"Superexponential Central\n(filtered for SC in {superexp_month_abbrev})"
+            if show_params_in_legend and 'cost_speed' in traj and 'announcement_delay' in traj:
+                label += f" (cs={traj['cost_speed']:.1f}mo, ad={traj['announcement_delay']:.1f}mo)"
+            ax.plot(traj["times"], traj["horizons"], color=superexp_color, linewidth=2,
+                    linestyle='--', alpha=0.8, zorder=18)
+            legend_elements.append(
+                Line2D([0], [0], color=superexp_color, linewidth=2, linestyle='--',
+                       label=label)
+            )
+
+    # Exponential central trajectory (filtered to exp_sc_month)
+    if exp_forecaster in monthly_central_trajectories_by_forecaster:
+        central_by_month = monthly_central_trajectories_by_forecaster[exp_forecaster]
+        if exp_sc_month in central_by_month:
+            traj = central_by_month[exp_sc_month]
+            # Parse month for abbreviated format
+            exp_month_abbrev = exp_sc_month.replace("November", "Nov").replace("January", "Jan").replace("February", "Feb").replace("March", "Mar").replace("April", "Apr").replace("May", "May").replace("June", "Jun").replace("July", "Jul").replace("August", "Aug").replace("September", "Sep").replace("October", "Oct").replace("December", "Dec")
+            label = f"Exponential Central\n(filtered for SC in {exp_month_abbrev})"
+            if show_params_in_legend and 'cost_speed' in traj and 'announcement_delay' in traj:
+                label += f" (cs={traj['cost_speed']:.1f}mo, ad={traj['announcement_delay']:.1f}mo)"
+            ax.plot(traj["times"], traj["horizons"], color=exp_color, linewidth=2,
+                    linestyle='--', alpha=0.8, zorder=18)
+            legend_elements.append(
+                Line2D([0], [0], color=exp_color, linewidth=2, linestyle='--',
+                       label=label)
+            )
+
+    # Mixed growth type central trajectory (filtered to mixed_sc_month)
+    # This uses the base forecaster (e.g., "Eli") which has probability split among growth types
+    if mixed_sc_month is not None and mixed_forecaster in monthly_central_trajectories_by_forecaster:
+        central_by_month = monthly_central_trajectories_by_forecaster[mixed_forecaster]
+        if mixed_sc_month in central_by_month:
+            traj = central_by_month[mixed_sc_month]
+            # Parse month for abbreviated format
+            mixed_month_abbrev = mixed_sc_month.replace("November", "Nov").replace("January", "Jan").replace("February", "Feb").replace("March", "Mar").replace("April", "Apr").replace("May", "May").replace("June", "Jun").replace("July", "Jul").replace("August", "Aug").replace("September", "Sep").replace("October", "Oct").replace("December", "Dec")
+            label = f"Central (mixed growth types)\n(filtered for SC in {mixed_month_abbrev})"
+            if show_params_in_legend and 'cost_speed' in traj and 'announcement_delay' in traj:
+                label += f" (cs={traj['cost_speed']:.1f}mo, ad={traj['announcement_delay']:.1f}mo)"
+            ax.plot(traj["times"], traj["horizons"], color=mixed_color, linewidth=2,
+                    linestyle='--', alpha=0.8, zorder=18)
+            legend_elements.append(
+                Line2D([0], [0], color=mixed_color, linewidth=2, linestyle='--',
+                       label=label)
+            )
+
+    # --- Reference lines ---
+    current_horizon = config["simulation"]["current_horizon"]
+    ax.axhline(y=current_horizon, color='gray', linestyle=':', alpha=0.8,
+               linewidth=2, label='Anchor Horizon (15 mins)')
+    ax.axvline(x=current_year, color='gray', linestyle=':', alpha=0.7,
+               linewidth=2, label='Anchor Time (Apr 2025)')
+
+    legend_elements.insert(0, Line2D([0], [0], color='gray', linestyle=':', linewidth=2, label='Anchor Horizon (15 mins)'))
+    legend_elements.insert(1, Line2D([0], [0], color='gray', linestyle=':', linewidth=2, label='Anchor Time (Apr 2025)'))
+
+    # --- Overlay external data ---
+    if overlay_external_data:
+        external_df = load_external_data()
+        if not external_df.empty:
+            mask = (external_df['release_year_decimal'] >= x_min) & (external_df['release_year_decimal'] <= x_max)
+            visible = external_df[mask]
+            if not visible.empty:
+                ax.scatter(visible['release_year_decimal'], visible['p80'], color='black', s=25,
+                           alpha=0.8, zorder=15, marker='o')
+                legend_elements.append(
+                    Line2D([0], [0], marker='o', color='w', markerfacecolor='black',
+                           markersize=5, label='METR 80% time horizons', linestyle='None')
+                )
+
+    # --- Axes formatting ---
+    if title is None:
+        title = f"Trajectory with Median Parameters vs Central Trajectories ({forecaster_name}'s distributions)"
+    ax.set_title(title, fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_yscale('log')
+
+    # Y-axis ticks
+    ax.autoscale_view()
+    y_min, y_max = ax.get_ylim()
+    min_time_minutes = 0.1 / 60
+    if y_min < min_time_minutes:
+        y_min = min_time_minutes
+        ax.set_ylim(y_min, y_max)
+
+    all_ticks = [
+        (0.01, "0.6s"),
+        (0.1, "6s"),
+        (0.5, "30s"),
+        (1, "1 min"),
+        (5, "5 min"),
+        (15, "15 min"),
+        (30, "30 min"),
+        (60, "1 hour"),
+        (240, "4 hours"),
+        (480, "1 work day"),
+        (2400, "1 work week"),
+        (10020, "1 work month"),
+        (60120, "1 year"),
+        (240480, "4 work years"),
+    ]
+    valid_ticks = [(pos, lab) for pos, lab in all_ticks if y_min <= pos <= y_max]
+    if valid_ticks:
+        pos, lab = zip(*valid_ticks)
+        ax.set_yticks(pos)
+        ax.set_yticklabels(lab)
+
+    # Grid & spines
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"],
+              framealpha=0.5, loc='upper left')
+
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    add_disclaimer(fig)
+    return fig
+
+
+def plot_median_trajectories_simple(
+    median_trajectory_data: dict,
+    config: dict,
+    *,
+    growth_type: str = "exponential",
+    overlay_external_data: bool = True,
+) -> plt.Figure:
+    """Plot median parameter trajectories for all forecasters on a single simple graph.
+
+    Parameters
+    ----------
+    median_trajectory_data : dict
+        Dict mapping forecaster_name -> {growth_type: trajectory_dict}
+        where trajectory_dict has 'times' and 'horizons' arrays.
+    config : dict
+        Global configuration.
+    growth_type : str
+        Which growth type to plot ("exponential" or "superexponential").
+    overlay_external_data : bool
+        Whether to overlay external benchmark data points.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    from matplotlib.lines import Line2D
+
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig = plt.figure(figsize=(12, 8), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+
+    current_year = 2025.25
+    x_min = current_year - 5
+    x_max = current_year + 5
+
+    legend_elements = []
+
+    # Get a colormap for distinct colors
+    n_forecasters = len(median_trajectory_data)
+    cmap = plt.get_cmap("tab10")
+
+    for idx, (forecaster_name, traj_data) in enumerate(median_trajectory_data.items()):
+        if growth_type in traj_data:
+            traj = traj_data[growth_type]
+            color = cmap(idx % 10)
+            ax.plot(traj["times"], traj["horizons"], color=color, linewidth=2.5,
+                    linestyle='-', alpha=0.9, zorder=20)
+            legend_elements.append(
+                Line2D([0], [0], color=color, linewidth=2.5, linestyle='-',
+                       label=forecaster_name)
+            )
+
+    # Reference lines
+    current_horizon = config["simulation"]["current_horizon"]
+    ax.axhline(y=current_horizon, color='gray', linestyle=':', alpha=0.8,
+               linewidth=2, label='Current Horizon (15 min)')
+    ax.axvline(x=current_year, color='gray', linestyle=':', alpha=0.7,
+               linewidth=2, label='Current Time')
+
+    legend_elements.insert(0, Line2D([0], [0], color='gray', linestyle=':', linewidth=2, label='Current Horizon (15 min)'))
+    legend_elements.insert(1, Line2D([0], [0], color='gray', linestyle=':', linewidth=2, label='Current Time'))
+
+    # Overlay external data
+    if overlay_external_data:
+        external_df = load_external_data()
+        if not external_df.empty:
+            mask = (external_df['release_year_decimal'] >= x_min) & (external_df['release_year_decimal'] <= x_max)
+            visible = external_df[mask]
+            if not visible.empty:
+                ax.scatter(visible['release_year_decimal'], visible['p80'], color='black', s=25,
+                           alpha=0.8, zorder=15, marker='o')
+                legend_elements.append(
+                    Line2D([0], [0], marker='o', color='w', markerfacecolor='black',
+                           markersize=5, label='METR 80% time horizons', linestyle='None')
+                )
+
+    # Axes formatting
+    growth_label = growth_type.capitalize()
+    ax.set_title(f"Median Parameter Trajectories ({growth_label} Growth)",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_yscale('log')
+
+    # Y-axis ticks
+    ax.autoscale_view()
+    y_min, y_max = ax.get_ylim()
+    min_time_minutes = 0.1 / 60
+    if y_min < min_time_minutes:
+        y_min = min_time_minutes
+        ax.set_ylim(y_min, y_max)
+
+    all_ticks = [
+        (0.01, "0.6s"),
+        (0.1, "6s"),
+        (0.5, "30s"),
+        (1, "1 min"),
+        (5, "5 min"),
+        (15, "15 min"),
+        (30, "30 min"),
+        (60, "1 hour"),
+        (240, "4 hours"),
+        (480, "1 work day"),
+        (2400, "1 work week"),
+        (10020, "1 work month"),
+        (60120, "1 year"),
+        (240480, "4 work years"),
+    ]
+    valid_ticks = [(pos, lab) for pos, lab in all_ticks if y_min <= pos <= y_max]
+    if valid_ticks:
+        pos, lab = zip(*valid_ticks)
+        ax.set_yticks(pos)
+        ax.set_yticklabels(lab)
+
+    # Grid & spines
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"],
+              framealpha=0.5, loc='upper left')
+
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    add_disclaimer(fig)
     return fig
