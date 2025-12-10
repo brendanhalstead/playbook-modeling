@@ -441,7 +441,7 @@ def load_and_plot_progress_multiplier_estimates():
 
     # Customize plot
     ax.set_xlabel('Date', fontsize=12)
-    ax.set_ylabel('Progress Multiplier (log scale)', fontsize=12)
+    ax.set_ylabel('Progress Multiplier', fontsize=12)
     ax.set_title('AI R&D progress multiplier backcast (intended interpolation method)', fontsize=14)
     ax.grid(True, alpha=0.3)
     ax.margins(0.1)

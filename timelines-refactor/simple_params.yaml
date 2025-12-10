@@ -43,20 +43,21 @@ forecasters:
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
       patch_rd_speedup: False
-  eli_exp_only:
-    name: "Eli_exp_only"
-    color: "#003000"
-    parent: "eli"
-    distributions:
-      p_superexponential: 0.0  # Probability of superexponential growth
-      p_subexponential: 0.0
-  eli_superexp_only:
-    name: "Eli_superexp_only"
-    color: "#0000AA"
-    parent: "eli"
-    distributions:
-      p_superexponential: 1.0  # Probability of superexponential growth
-      p_subexponential: 0.0
+      software_progress_share_ci: [0.5, 0.50001]  # 80% CI for fraction of progress from software (vs compute). 0.5 = equal weighting (original behavior)
+  # eli_exp_only:
+  #   name: "Eli_exp_only"
+  #   color: "#003000"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 0.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
+  # eli_superexp_only:
+  #   name: "Eli_superexp_only"
+  #   color: "#0000AA"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 1.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
   # eli_patched_rd_speedup:
   #   name: "Eli_patched_rd_speedup"
   #   color: "#900000"

@@ -1,10 +1,13 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import lognorm, gaussian_kde, norm
 import yaml
+import csv
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
+from collections import OrderedDict
 from simple_forecasting_timelines_plotting import *
 from timelines_common import *
 
@@ -133,7 +136,14 @@ def get_median_samples(config: dict) -> dict:
     samples = {}
 
     # Get median for initial_software_progress_share (normal distribution)
-    lower, upper = config["initial_software_progress_share_ci"]
+    # Check multiple locations for the config key
+    if "initial_software_progress_share_ci" in config:
+        lower, upper = config["initial_software_progress_share_ci"]
+    elif "distributions" in config and "initial_software_progress_share_ci" in config["distributions"]:
+        lower, upper = config["distributions"]["initial_software_progress_share_ci"]
+    else:
+        # Default to 0.5 if not specified
+        lower, upper = 0.5, 0.5
     samples["initial_software_progress_share"] = np.array([(lower + upper) / 2])
 
     # Get median (50th percentile) for each lognormal distribution
@@ -217,8 +227,8 @@ def format_horizon(h: float) -> str:
         return f"{h/43200:.1f} months"
 
 
-def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> str:
-    """Run a single trajectory with median parameters and return the results as a string."""
+def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> tuple[str, dict]:
+    """Run a single trajectory with median parameters and return the results as a string and structured data."""
     # Get median samples
     median_samples = get_median_samples(forecaster_config)
 
@@ -248,16 +258,37 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
     max_simulation_years = config["simulation"]["max_simulation_years"]
 
     # Run simulation (May version has different signature)
-    ending_times, trajectories, _ = calculate_sc_arrival_year_with_trajectories(
+    ending_times, trajectories, _, prog_multiplier_trajectories = calculate_sc_arrival_year_with_trajectories(
         median_samples, current_horizon, dt,
         human_alg_progress_decrease_date, max_simulation_years,
         forecaster_config, config["simulation"]
     )
 
-    arrival_year = ending_times[0]
+    arrival_year = ending_times[0]  # Internal time (without announcement delay)
     trajectory = trajectories[0]
+    prog_multiplier_trajectory = prog_multiplier_trajectories[0] if prog_multiplier_trajectories else []
+    announcement_delay_years = median_samples['announcement_delay'][0] / 12
 
+    # Display SC arrival in internal time (when it actually happens, not when announced)
     lines.append(f"\nMedian SC Arrival: {format_year_month(arrival_year)}")
+
+    # Find human-cost-parity point (when horizon first reaches h_SC requirement)
+    h_SC_threshold_minutes = median_samples['h_SC'][0] * 60 * 167  # Convert work-months to minutes
+    human_cost_parity_year_announced = None  # Trajectory times include announcement delay
+    if trajectory:
+        for t, h in trajectory:
+            if h >= h_SC_threshold_minutes:
+                human_cost_parity_year_announced = t
+                break
+
+    if human_cost_parity_year_announced is not None:
+        # Convert HCP to internal time (subtract announcement delay) to match SC arrival reference frame
+        human_cost_parity_year = human_cost_parity_year_announced - announcement_delay_years
+        lines.append(f"Human-Cost-Parity: {format_year_month(human_cost_parity_year)}")
+        # Calculate days between human-cost-parity and SC arrival (both in internal time)
+        days_to_sc = (arrival_year - human_cost_parity_year) * 365.25
+        lines.append(f"Days from Human-Cost-Parity to SC: {days_to_sc:.1f} days")
+
     lines.append(f"\nTrajectory (selected points):")
     lines.append(f"  {'Year':<12} {'Horizon':<20}")
     lines.append(f"  {'-'*12} {'-'*20}")
@@ -276,11 +307,98 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
             t, h = trajectory[-1]
             lines.append(f"  {format_year_month(t):<12} {format_horizon(h):<20} (final)")
 
+    # --- Subexponential Median Trajectory ---
+    lines.append(f"\n{'-'*60}")
+    lines.append(f"SUBEXPONENTIAL MEDIAN TRAJECTORY")
+    lines.append(f"{'-'*60}")
+
+    # Create subexponential samples by copying and modifying
+    sub_samples = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in median_samples.items()}
+    sub_samples["is_subexponential"] = np.array([True])
+    sub_samples["is_superexponential"] = np.array([False])
+    sub_samples["is_exponential"] = np.array([False])
+
+    lines.append(f"Subexponential Parameters:")
+    lines.append(f"  sub_doubling_growth_fraction: {sub_samples['sub_doubling_growth_fraction']:.3f}")
+
+    # Run subexponential simulation
+    sub_ending_times, sub_trajectories, _, sub_prog_multiplier_trajectories = calculate_sc_arrival_year_with_trajectories(
+        sub_samples, current_horizon, dt,
+        human_alg_progress_decrease_date, max_simulation_years,
+        forecaster_config, config["simulation"]
+    )
+
+    sub_arrival_year = sub_ending_times[0]
+    sub_trajectory = sub_trajectories[0]
+    sub_prog_multiplier_trajectory = sub_prog_multiplier_trajectories[0] if sub_prog_multiplier_trajectories else []
+
+    lines.append(f"\nSubexponential SC Arrival: {format_year_month(sub_arrival_year)}")
+
+    # Find HCP for subexponential trajectory
+    sub_hcp_announced = None
+    if sub_trajectory:
+        for t, h in sub_trajectory:
+            if h >= h_SC_threshold_minutes:
+                sub_hcp_announced = t
+                break
+
+    if sub_hcp_announced is not None:
+        sub_hcp = sub_hcp_announced - announcement_delay_years
+        lines.append(f"Human-Cost-Parity: {format_year_month(sub_hcp)}")
+        sub_days_to_sc = (sub_arrival_year - sub_hcp) * 365.25
+        lines.append(f"Days from Human-Cost-Parity to SC: {sub_days_to_sc:.1f} days")
+
+    lines.append(f"\nTrajectory (selected points):")
+    lines.append(f"  {'Year':<12} {'Horizon':<20}")
+    lines.append(f"  {'-'*12} {'-'*20}")
+
+    if sub_trajectory:
+        n_points = len(sub_trajectory)
+        step = max(1, n_points // 10)
+        for i in range(0, n_points, step):
+            t, h = sub_trajectory[i]
+            lines.append(f"  {format_year_month(t):<12} {format_horizon(h):<20}")
+
+        if n_points > 1:
+            t, h = sub_trajectory[-1]
+            lines.append(f"  {format_year_month(t):<12} {format_horizon(h):<20} (final)")
+
     lines.append(f"{'='*60}\n")
 
     result = "\n".join(lines)
     print(result)
-    return result
+
+    # Build structured data for CSV export
+    structured_data = {
+        "forecaster_name": forecaster_name,
+        # Median parameters
+        "h_SC_work_months": median_samples['h_SC'][0],
+        "horizon_doubling_time_months": median_samples['horizon_doubling_time'][0],
+        "cost_speed_months": median_samples['cost_speed'][0],
+        "announcement_delay_months": median_samples['announcement_delay'][0],
+        "present_prog_multiplier": median_samples['present_prog_multiplier'][0],
+        "SC_prog_multiplier": median_samples['SC_prog_multiplier'][0],
+        "initial_software_progress_share": median_samples['initial_software_progress_share'][0],
+        "growth_type": "superexponential" if median_samples["is_superexponential"][0] else "exponential",
+        "superexponential_start_horizon": median_samples['superexponential_start_horizon'][0] if median_samples["is_superexponential"][0] else None,
+        "se_doubling_decay_fraction": median_samples['se_doubling_decay_fraction'][0] if median_samples["is_superexponential"][0] else None,
+        # Main trajectory results
+        "sc_arrival_year": arrival_year,
+        "human_cost_parity_year": human_cost_parity_year if human_cost_parity_year_announced is not None else None,
+        "days_hcp_to_sc": days_to_sc if human_cost_parity_year_announced is not None else None,
+        # Subexponential trajectory results
+        "sub_sc_arrival_year": sub_arrival_year,
+        "sub_human_cost_parity_year": sub_hcp if sub_hcp_announced is not None else None,
+        "sub_days_hcp_to_sc": sub_days_to_sc if sub_hcp_announced is not None else None,
+        # Full trajectories for detailed CSV
+        "trajectory": trajectory,
+        "sub_trajectory": sub_trajectory,
+        # Progress multiplier trajectories
+        "prog_multiplier_trajectory": prog_multiplier_trajectory,
+        "sub_prog_multiplier_trajectory": sub_prog_multiplier_trajectory,
+    }
+
+    return result, structured_data
 
 
 def calculate_base_time(samples: dict, current_horizon: float) -> tuple[np.ndarray, list]:
@@ -562,10 +680,12 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
     
     # Initialize array for actual times
     ending_times = np.zeros(n_sims)
-    
+
     # Store trajectories for each simulation
     trajectories = []
-    
+    # Store progress multiplier trajectories for each simulation
+    prog_multiplier_trajectories = []
+
     # Get current date as decimal year
     # current_date = datetime.now()
     # current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
@@ -582,11 +702,14 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
         
         # Initialize trajectory list for this simulation
         trajectory = []
-        
+        # Initialize progress multiplier tracking list
+        prog_multiplier_trajectory = []
+
         # If base time is zero (already at target horizon), record current state and continue
         if base_time_in_months[i] == 0:
             ending_times[i] = time  # No additional time required
             trajectories.append(trajectory)
+            prog_multiplier_trajectories.append(prog_multiplier_trajectory)
             continue
         
         # Initialize labor-based research variables
@@ -608,10 +731,15 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
-            if forecaster_config["patch_rd_speedup"]:
+            if forecaster_config.get("automation_off", False):
+                software_prog_multiplier = 1.0
+            elif forecaster_config["patch_rd_speedup"]:
                 software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
             else:
                 software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+
+            # Track progress multiplier data
+            prog_multiplier_trajectory.append((time + samples["announcement_delay"][i]/12, progress_fraction, software_prog_multiplier))
 
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
@@ -660,6 +788,7 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             
         ending_times[i] = time
         trajectories.append(trajectory)
+        prog_multiplier_trajectories.append(prog_multiplier_trajectory)
 
     # Ensure baseline_growths has one entry per simulation (edge case: zero base time simulations)
     if len(baseline_growths) < n_sims:
@@ -669,7 +798,7 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
         baseline_growths.extend([fallback_growth] * missing)
 
     print(f"ending_times: {ending_times}")
-    return ending_times, trajectories, baseline_growths
+    return ending_times, trajectories, baseline_growths, prog_multiplier_trajectories
 
 def backcast_base_time(samples: dict, current_horizon: float, dt: float, backcast_years: int = 5) -> list:
     """Backcast base time for each sample."""
@@ -885,7 +1014,9 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
 
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
-            if forecaster_config["patch_rd_speedup"]:
+            if forecaster_config.get("automation_off", False):
+                software_prog_multiplier = 1.0
+            elif forecaster_config["patch_rd_speedup"]:
                 software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
             else:
                 software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
@@ -926,12 +1057,314 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
 
         trajectories.append(trajectory)
     return trajectories
-                
+
+
+def calculate_hcp_distributions(
+    all_forecaster_trajectories: dict,
+    all_forecaster_results: dict,
+    all_forecaster_samples: dict,
+    config: dict,
+    output_dir: Path
+) -> dict:
+    """Calculate Human-Cost-Parity (HCP) distributions for all forecasters.
+
+    For each simulation trajectory, finds when the horizon first reaches the h_SC
+    threshold (HCP point) and calculates:
+    - When HCP is achieved (calendar year)
+    - Time gap from HCP to SC arrival (in days)
+
+    Parameters
+    ----------
+    all_forecaster_trajectories : dict
+        Dictionary mapping forecaster names to lists of trajectories
+    all_forecaster_results : dict
+        Dictionary mapping forecaster names to SC arrival times
+    all_forecaster_samples : dict
+        Dictionary mapping forecaster names to sampled parameters
+    config : dict
+        Configuration dictionary
+    output_dir : Path
+        Output directory for saving results
+
+    Returns
+    -------
+    dict
+        Dictionary with HCP distribution data for each forecaster
+    """
+    import pandas as pd
+
+    hcp_data = {}
+
+    for forecaster_name in all_forecaster_trajectories.keys():
+        trajectories = all_forecaster_trajectories[forecaster_name]
+        sc_arrivals = all_forecaster_results[forecaster_name]
+        samples = all_forecaster_samples[forecaster_name]
+
+        # Get h_SC threshold in minutes for each simulation
+        h_SC_thresholds = samples['h_SC'] * 60 * 167  # Convert work-months to minutes
+
+        hcp_years = []
+        hcp_to_sc_days = []
+
+        for i, trajectory in enumerate(trajectories):
+            if not trajectory:
+                hcp_years.append(np.nan)
+                hcp_to_sc_days.append(np.nan)
+                continue
+
+            h_SC_threshold = h_SC_thresholds[i]
+            sc_arrival = sc_arrivals[i]  # Internal time (without announcement delay)
+            announcement_delay_years = samples['announcement_delay'][i] / 12
+
+            # Find when horizon first reaches h_SC threshold
+            hcp_year_announced = None  # Trajectory times include announcement delay
+            for t, h in trajectory:
+                if h >= h_SC_threshold:
+                    hcp_year_announced = t
+                    break
+
+            if hcp_year_announced is not None:
+                # Convert HCP to internal time (subtract announcement delay) to match SC arrival
+                hcp_year = hcp_year_announced - announcement_delay_years
+                hcp_years.append(hcp_year)
+                # Calculate days from HCP to SC arrival (both in internal time)
+                days_to_sc = (sc_arrival - hcp_year) * 365.25
+                hcp_to_sc_days.append(days_to_sc)
+            else:
+                hcp_years.append(np.nan)
+                hcp_to_sc_days.append(np.nan)
+
+        hcp_years = np.array(hcp_years)
+        hcp_to_sc_days = np.array(hcp_to_sc_days)
+
+        # Filter out NaN values for statistics
+        valid_hcp_years = hcp_years[~np.isnan(hcp_years)]
+        valid_hcp_to_sc_days = hcp_to_sc_days[~np.isnan(hcp_to_sc_days)]
+
+        hcp_data[forecaster_name] = {
+            'hcp_years': hcp_years,
+            'hcp_to_sc_days': hcp_to_sc_days,
+            'valid_hcp_years': valid_hcp_years,
+            'valid_hcp_to_sc_days': valid_hcp_to_sc_days,
+        }
+
+    # Create plots
+    fig_hcp_year, axes_year = plt.subplots(1, 2, figsize=(14, 5))
+    fig_hcp_gap, axes_gap = plt.subplots(1, 2, figsize=(14, 5))
+
+    colors = plt.cm.tab10.colors
+
+    # Plot HCP arrival year distributions
+    ax_pdf_year = axes_year[0]
+    ax_cdf_year = axes_year[1]
+
+    for idx, (forecaster_name, data) in enumerate(hcp_data.items()):
+        valid_years = data['valid_hcp_years']
+        if len(valid_years) < 2:
+            continue
+        color = colors[idx % len(colors)]
+
+        # PDF using KDE
+        kde = gaussian_kde(valid_years)
+        x_range = np.linspace(valid_years.min() - 0.5, valid_years.max() + 0.5, 200)
+        ax_pdf_year.plot(x_range, kde(x_range), label=forecaster_name, color=color)
+        ax_pdf_year.fill_between(x_range, kde(x_range), alpha=0.2, color=color)
+
+        # CDF
+        sorted_years = np.sort(valid_years)
+        cdf = np.arange(1, len(sorted_years) + 1) / len(sorted_years)
+        ax_cdf_year.plot(sorted_years, cdf, label=forecaster_name, color=color)
+
+    ax_pdf_year.set_xlabel('Year')
+    ax_pdf_year.set_ylabel('Density')
+    ax_pdf_year.set_title('Human-Cost-Parity Arrival Year (PDF)')
+    ax_pdf_year.legend()
+    ax_pdf_year.grid(True, alpha=0.3)
+
+    ax_cdf_year.set_xlabel('Year')
+    ax_cdf_year.set_ylabel('Cumulative Probability')
+    ax_cdf_year.set_title('Human-Cost-Parity Arrival Year (CDF)')
+    ax_cdf_year.legend()
+    ax_cdf_year.grid(True, alpha=0.3)
+
+    fig_hcp_year.suptitle('Distribution of Human-Cost-Parity (HCP) Arrival Year', fontsize=14)
+    fig_hcp_year.tight_layout()
+    fig_hcp_year.savefig(output_dir / "hcp_arrival_year_distribution.png", dpi=300, bbox_inches="tight")
+    plt.close(fig_hcp_year)
+
+    # Plot HCP-to-SC gap distributions
+    ax_pdf_gap = axes_gap[0]
+    ax_cdf_gap = axes_gap[1]
+
+    for idx, (forecaster_name, data) in enumerate(hcp_data.items()):
+        valid_days = data['valid_hcp_to_sc_days']
+        if len(valid_days) < 2:
+            continue
+        color = colors[idx % len(colors)]
+
+        # PDF using KDE
+        kde = gaussian_kde(valid_days)
+        x_range = np.linspace(max(0, valid_days.min() - 10), valid_days.max() + 10, 200)
+        ax_pdf_gap.plot(x_range, kde(x_range), label=forecaster_name, color=color)
+        ax_pdf_gap.fill_between(x_range, kde(x_range), alpha=0.2, color=color)
+
+        # CDF
+        sorted_days = np.sort(valid_days)
+        cdf = np.arange(1, len(sorted_days) + 1) / len(sorted_days)
+        ax_cdf_gap.plot(sorted_days, cdf, label=forecaster_name, color=color)
+
+    ax_pdf_gap.set_xlabel('Days')
+    ax_pdf_gap.set_ylabel('Density')
+    ax_pdf_gap.set_title('HCP to SC Gap (PDF)')
+    ax_pdf_gap.legend()
+    ax_pdf_gap.grid(True, alpha=0.3)
+
+    ax_cdf_gap.set_xlabel('Days')
+    ax_cdf_gap.set_ylabel('Cumulative Probability')
+    ax_cdf_gap.set_title('HCP to SC Gap (CDF)')
+    ax_cdf_gap.legend()
+    ax_cdf_gap.grid(True, alpha=0.3)
+
+    fig_hcp_gap.suptitle('Distribution of Time from Human-Cost-Parity to SC Arrival', fontsize=14)
+    fig_hcp_gap.tight_layout()
+    fig_hcp_gap.savefig(output_dir / "hcp_to_sc_gap_distribution.png", dpi=300, bbox_inches="tight")
+    plt.close(fig_hcp_gap)
+
+    # Export to CSV
+    csv_rows = []
+    for forecaster_name, data in hcp_data.items():
+        for i in range(len(data['hcp_years'])):
+            csv_rows.append({
+                'forecaster': forecaster_name,
+                'simulation_id': i,
+                'hcp_year': data['hcp_years'][i],
+                'hcp_to_sc_days': data['hcp_to_sc_days'][i],
+            })
+
+    df = pd.DataFrame(csv_rows)
+    df.to_csv(output_dir / "hcp_distributions.csv", index=False)
+
+    # Also export summary statistics
+    summary_rows = []
+    for forecaster_name, data in hcp_data.items():
+        valid_years = data['valid_hcp_years']
+        valid_days = data['valid_hcp_to_sc_days']
+        sc_arrivals = all_forecaster_results[forecaster_name]
+
+        if len(valid_years) > 0:
+            summary_rows.append({
+                'forecaster': forecaster_name,
+                'sc_year_10th': np.percentile(sc_arrivals, 10),
+                'sc_year_25th': np.percentile(sc_arrivals, 25),
+                'sc_year_50th': np.percentile(sc_arrivals, 50),
+                'sc_year_75th': np.percentile(sc_arrivals, 75),
+                'sc_year_90th': np.percentile(sc_arrivals, 90),
+                'sc_year_mean': np.mean(sc_arrivals),
+                'sc_year_std': np.std(sc_arrivals),
+                'hcp_year_10th': np.percentile(valid_years, 10),
+                'hcp_year_25th': np.percentile(valid_years, 25),
+                'hcp_year_50th': np.percentile(valid_years, 50),
+                'hcp_year_75th': np.percentile(valid_years, 75),
+                'hcp_year_90th': np.percentile(valid_years, 90),
+                'hcp_year_mean': np.mean(valid_years),
+                'hcp_year_std': np.std(valid_years),
+                'hcp_to_sc_days_10th': np.percentile(valid_days, 10),
+                'hcp_to_sc_days_25th': np.percentile(valid_days, 25),
+                'hcp_to_sc_days_50th': np.percentile(valid_days, 50),
+                'hcp_to_sc_days_75th': np.percentile(valid_days, 75),
+                'hcp_to_sc_days_90th': np.percentile(valid_days, 90),
+                'hcp_to_sc_days_mean': np.mean(valid_days),
+                'hcp_to_sc_days_std': np.std(valid_days),
+                'n_valid_samples': len(valid_years),
+            })
+
+    df_summary = pd.DataFrame(summary_rows)
+    df_summary.to_csv(output_dir / "hcp_distributions_summary.csv", index=False)
+
+    print(f"\nSaved HCP distribution plots and CSVs to {output_dir}")
+    print("\nHCP Distribution Summary:")
+    print("=" * 80)
+    for forecaster_name, data in hcp_data.items():
+        valid_years = data['valid_hcp_years']
+        valid_days = data['valid_hcp_to_sc_days']
+        if len(valid_years) > 0:
+            print(f"\n{forecaster_name}:")
+            print(f"  HCP Arrival Year: median={np.median(valid_years):.2f}, "
+                  f"10th={np.percentile(valid_years, 10):.2f}, "
+                  f"90th={np.percentile(valid_years, 90):.2f}")
+            print(f"  HCP-to-SC Gap: median={np.median(valid_days):.1f} days, "
+                  f"10th={np.percentile(valid_days, 10):.1f}, "
+                  f"90th={np.percentile(valid_days, 90):.1f}")
+
+    return hcp_data
+
+
+# FORECASTER INHERITANCE FUNCTIONS
+
+def _toposort_forecasters(forecasters: dict) -> list:
+    """Return forecaster names sorted so that parents come before children.
+
+    Raises:
+        ValueError: if a cycle is detected or if a referenced parent is missing.
+    """
+    visited = {}
+    order: list[str] = []
+
+    def dfs(name: str):
+        if name in visited:
+            if visited[name] == "temp":
+                raise ValueError(
+                    f"Circular parent relationship detected involving '{name}'."
+                )
+            return
+        visited[name] = "temp"
+        parent_name = forecasters.get(name, {}).get("parent")
+        if parent_name:
+            if parent_name not in forecasters:
+                raise ValueError(
+                    f"Parent forecaster '{parent_name}' (referenced by '{name}') not found."
+                )
+            dfs(parent_name)
+        visited[name] = "perm"
+        order.append(name)
+
+    for fname in forecasters:
+        dfs(fname)
+    return order
+
+
+def apply_inheritance_to_forecasters(forecasters: dict) -> OrderedDict:
+    """Resolve parent-based inheritance and return an OrderedDict in topological order."""
+    sorted_names = _toposort_forecasters(forecasters)
+    for name in sorted_names:
+        cfg = forecasters[name]
+        parent_name = cfg.get("parent")
+        if parent_name:
+            parent_cfg = forecasters[parent_name]
+            # Copy non-distribution fields from parent if not present in child
+            for key, value in parent_cfg.items():
+                if key not in cfg and key != "distributions":
+                    cfg[key] = value
+            # Copy distribution fields from parent if not present in child
+            parent_dist = parent_cfg.get("distributions", {})
+            child_dist = cfg.setdefault("distributions", {})
+            for param, value in parent_dist.items():
+                if param not in child_dist:
+                    child_dist[param] = value
+                else:
+                    print(
+                        f"Applying change to {param} for {name} (overrides {parent_cfg.get('name', parent_name)})"
+                    )
+    return OrderedDict((n, forecasters[n]) for n in sorted_names)
+
 
 def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tuple[plt.Figure, dict]:
     """Run simplified SC simulation and plot results."""
     print("Loading configuration...")
     config = load_config(config_path)
+
+    # Apply parent-child inheritance (with topological sort)
+    config["forecasters"] = apply_inheritance_to_forecasters(config["forecasters"])
 
     # Create output directory with current date and time
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -951,16 +1384,77 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
     print("RUNNING MEDIAN TRAJECTORIES")
     print("="*60)
     median_results = []
+    median_structured_data = []
     for forecaster_key, forecaster_config in config["forecasters"].items():
-        result = run_median_trajectory(config, forecaster_config, forecaster_config["name"])
+        result, structured_data = run_median_trajectory(config, forecaster_config, forecaster_config["name"])
         median_results.append(result)
+        median_structured_data.append(structured_data)
 
-    # Save median trajectory results to file
+    # Save median trajectory results to txt file
     with open(output_dir / "median_trajectories.txt", "w") as f:
         f.write("MEDIAN TRAJECTORY RESULTS\n")
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("\n".join(median_results))
     print(f"Saved median trajectories to {output_dir / 'median_trajectories.txt'}")
+
+    # Save median trajectory summary to CSV
+    csv_columns = [
+        "forecaster_name", "sc_arrival_year", "diff_sc_from_prev", "sub_sc_arrival_year", "diff_sub_sc_from_prev",
+        "growth_type",
+        "h_SC_work_months", "horizon_doubling_time_months", "cost_speed_months",
+        "announcement_delay_months", "present_prog_multiplier", "SC_prog_multiplier",
+        "initial_software_progress_share", "superexponential_start_horizon", "se_doubling_decay_fraction",
+        "human_cost_parity_year", "days_hcp_to_sc",
+        "sub_human_cost_parity_year", "sub_days_hcp_to_sc"
+    ]
+    # Add diff columns by computing difference from previous row
+    prev_sc = None
+    prev_sub_sc = None
+    for data in median_structured_data:
+        curr_sc = data.get("sc_arrival_year")
+        curr_sub_sc = data.get("sub_sc_arrival_year")
+        data["diff_sc_from_prev"] = curr_sc - prev_sc if prev_sc is not None and curr_sc is not None else None
+        data["diff_sub_sc_from_prev"] = curr_sub_sc - prev_sub_sc if prev_sub_sc is not None and curr_sub_sc is not None else None
+        prev_sc = curr_sc
+        prev_sub_sc = curr_sub_sc
+    with open(output_dir / "median_trajectories.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=csv_columns, extrasaction='ignore')
+        writer.writeheader()
+        for data in median_structured_data:
+            writer.writerow(data)
+    print(f"Saved median trajectories summary to {output_dir / 'median_trajectories.csv'}")
+
+    # Save detailed trajectory points to separate CSV
+    with open(output_dir / "median_trajectory_points.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["forecaster_name", "trajectory_type", "year", "horizon_minutes"])
+        for data in median_structured_data:
+            forecaster = data["forecaster_name"]
+            # Main trajectory
+            if data["trajectory"]:
+                for t, h in data["trajectory"]:
+                    writer.writerow([forecaster, "main", t, h])
+            # Subexponential trajectory
+            if data["sub_trajectory"]:
+                for t, h in data["sub_trajectory"]:
+                    writer.writerow([forecaster, "subexponential", t, h])
+    print(f"Saved detailed trajectory points to {output_dir / 'median_trajectory_points.csv'}")
+
+    # Save progress multiplier trajectories to separate CSV
+    with open(output_dir / "median_prog_multiplier_trajectories.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["forecaster_name", "trajectory_type", "year", "progress_fraction", "software_prog_multiplier"])
+        for data in median_structured_data:
+            forecaster = data["forecaster_name"]
+            # Main trajectory progress multipliers
+            if data.get("prog_multiplier_trajectory"):
+                for t, pf, pm in data["prog_multiplier_trajectory"]:
+                    writer.writerow([forecaster, "main", t, pf, pm])
+            # Subexponential trajectory progress multipliers
+            if data.get("sub_prog_multiplier_trajectory"):
+                for t, pf, pm in data["sub_prog_multiplier_trajectory"]:
+                    writer.writerow([forecaster, "subexponential", t, pf, pm])
+    print(f"Saved progress multiplier trajectories to {output_dir / 'median_prog_multiplier_trajectories.csv'}")
 
     # Get current date as decimal year
     # current_date = datetime.now()
@@ -984,8 +1478,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             all_forecaster_samples[name] = samples
             
             # Calculate time to SC
-            all_forecaster_results[name], all_forecaster_trajectories[name], all_forecaster_baseline_growths[name] = calculate_sc_arrival_year_with_trajectories(
-                samples, 
+            all_forecaster_results[name], all_forecaster_trajectories[name], all_forecaster_baseline_growths[name], _ = calculate_sc_arrival_year_with_trajectories(
+                samples,
                 config["simulation"]["current_horizon"],
                 config["simulation"]["dt"],
                 config["simulation"]["human_alg_progress_decrease_date"],
@@ -1058,6 +1552,17 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
     fig_cdf = plot_results_cdf(all_forecaster_results, config, show_percentile_lines=False)
     fig_cdf.savefig(output_dir / "simple_combined_headline_cdf.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cdf)
+
+    # Calculate and save HCP distributions
+    print("\nCalculating HCP distributions...")
+    hcp_data = calculate_hcp_distributions(
+        all_forecaster_trajectories,
+        all_forecaster_results,
+        all_forecaster_samples,
+        config,
+        output_dir
+    )
+
     for forecaster_name in all_forecaster_results.keys():
         # --- Figures that are independent of a specific SC month ---
         fig_backcasted_colored = plot_backcasted_trajectories(
@@ -1213,6 +1718,17 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                 bbox_inches="tight",
             )
 
+            # Save central trajectory data as CSV
+            if central_path is not None:
+                central_df = pd.DataFrame({
+                    'calendar_time': central_path['times'],
+                    'time_horizon_minutes': central_path['horizons'],
+                })
+                central_df.to_csv(
+                    combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
+                    index=False,
+                )
+
             # Close month-specific figures to free memory
             plt.close(fig_trajectories)
             plt.close(fig_combined_month)
@@ -1243,5 +1759,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
     return fig, all_forecaster_results
 
 if __name__ == "__main__":
-    run_simple_sc_simulation()
+    import sys
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "simple_params_may.yaml"
+    run_simple_sc_simulation(config_path)
     print(f"\nSimulation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 

@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 5000   # Number of Monte Carlo simulation runs
+  n_sims: 5   # Number of Monte Carlo simulation runs
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
@@ -26,8 +26,8 @@ plotting_style:
 
 # Forecaster configurations
 forecasters:
-  eli_patched_rd_speedup:
-    name: "Eli_patched_rd_speedup"
+  eli:
+    name: "Eli"
     color: "#900000"
     distributions:
       h_SC_ci: [1, 14400]  # Months needed for SC
@@ -42,7 +42,84 @@ forecasters:
       sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-      patch_rd_speedup: True
+      patch_rd_speedup: False
+      software_progress_share_ci: [0.5, 0.50001]  # 80% CI for fraction of progress from software (vs compute). 0.5 = equal weighting (original behavior)
+  present_day:
+    name: "present_day"
+    color: "#003000"
+    parent: "eli"
+    current_horizon: 26  # Current time horizon in minutes (point estimate)
+    current_year: 2025.26  # Current year for the simulation
+    distributions:
+      present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+      SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
+  present_doubling_time:
+    name: "present_doubling_time"
+    color: "#003000"
+    parent: "present_day"
+    distributions:
+      T_t_ci: [5.5, 5.50001] # Horizon doubling time in months
+  doubling_decay_fraction:
+    name: "doubling_decay_fraction"
+    color: "#003000"
+    parent: "present_doubling_time"
+    distributions:
+      se_doubling_decay_fraction: 0.08 # If superexponential, fraction by which each doubling gets easier
+  time_horizon_requirement:
+    name: "time_horizon_requirement"
+    color: "#003000"
+    parent: "doubling_decay_fraction"
+    distributions:
+      h_SC_ci: [1200, 1200.0001] # Months needed for SC
+  software_progress_share:
+    name: "software_progress_share"
+    color: "#003000"
+    parent: "time_horizon_requirement"
+    distributions:
+      software_progress_share_ci: [0.61, 0.61001] # 80% CI for fraction of progress from software (vs compute). 0.5 = equal weighting (original behavior)
+  cost_speed:
+    name: "cost_speed"
+    color: "#003000"
+    parent: "software_progress_share"
+    distributions:
+      cost_speed_ci: [13, 13.001] # Coding efficiency in months
+  sc_prog_multiplier:
+    name: "sc_prog_multiplier"
+    color: "#003000"
+    parent: "cost_speed"
+    distributions:
+      SC_prog_multiplier_ci: [18.5, 18.501]  # Progress multiplier at SC - 1
+  # eli_exp_only:
+  #   name: "Eli_exp_only"
+  #   color: "#003000"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 0.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
+  # eli_superexp_only:
+  #   name: "Eli_superexp_only"
+  #   color: "#0000AA"
+  #   parent: "eli"
+  #   distributions:
+  #     p_superexponential: 1.0  # Probability of superexponential growth
+  #     p_subexponential: 0.0
+  # eli_patched_rd_speedup:
+  #   name: "Eli_patched_rd_speedup"
+  #   color: "#900000"
+  #   distributions:
+  #     h_SC_ci: [1, 14400]  # Months needed for SC
+  #     T_t_ci: [2.5, 9]        # Horizon doubling time in months
+  #     cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
+  #     announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
+  #     present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+  #     SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
+  #     p_superexponential: 0.45 # Probability of superexponential growth
+  #     p_subexponential: 0.1    # Probability of subexponential growth
+  #     se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
+  #     sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
+  #     se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+  #     sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+  #     patch_rd_speedup: True
   # eli_exp_only_patched_rd_speedup:
   #   name: "Eli_exp_only_patched_rd_speedup"
   #   color: "#003000"

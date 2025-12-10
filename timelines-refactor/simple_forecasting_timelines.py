@@ -96,6 +96,24 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     # Patch R&D speedup
     samples["patch_rd_speedup"] = np.full(n_sims, config["distributions"]["patch_rd_speedup"])
 
+    # Sample software progress share (fraction of progress from software vs compute)
+    # If not specified, default to 0.5 (equal weighting, equivalent to averaging)
+    if "software_progress_share_ci" in config["distributions"]:
+        lower, upper = config["distributions"]["software_progress_share_ci"]
+        # Convert 80% CI to normal distribution parameters
+        z_low = -1.28  # norm.ppf(0.1)
+        z_high = 1.28  # norm.ppf(0.9)
+        mean = (lower + upper) / 2
+        std = (upper - lower) / (z_high - z_low)
+        # Generate samples and clip to [0.1, 0.9]
+        samples["software_progress_share"] = np.clip(
+            np.random.normal(mean, std, n_sims),
+            0.1, 0.9
+        )
+    else:
+        # Default to 0.5 (equivalent to the original averaging behavior)
+        samples["software_progress_share"] = np.full(n_sims, 0.5)
+
     return samples
 
 
@@ -152,6 +170,13 @@ def get_median_samples(config: dict) -> dict:
     # Patch R&D speedup
     samples["patch_rd_speedup"] = np.array([config["distributions"]["patch_rd_speedup"]])
 
+    # Software progress share - use median of CI if specified, else 0.5
+    if "software_progress_share_ci" in config["distributions"]:
+        lower, upper = config["distributions"]["software_progress_share_ci"]
+        samples["software_progress_share"] = np.array([(lower + upper) / 2])
+    else:
+        samples["software_progress_share"] = np.array([0.5])
+
     return samples
 
 
@@ -171,15 +196,16 @@ def format_horizon(h: float) -> str:
         return f"{h/43200:.1f} months"
 
 
-def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> tuple[str, dict]:
+def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> tuple[str, dict, dict]:
     """Run trajectories with median parameters for both exponential and superexponential growth.
 
     Returns
     -------
-    tuple[str, dict]
-        A tuple of (text_output, trajectory_data) where trajectory_data is a dict
-        mapping growth_type ("exponential", "superexponential") to trajectory dicts
-        with "times" and "horizons" arrays.
+    tuple[str, dict, dict]
+        A tuple of (text_output, trajectory_data, structured_data) where:
+        - trajectory_data is a dict mapping growth_type ("exponential", "superexponential")
+          to trajectory dicts with "times" and "horizons" arrays.
+        - structured_data is a dict with all key values for CSV export.
     """
     # Create config with this forecaster's distributions
     forecaster_dist_config = {"distributions": forecaster_config["distributions"]}
@@ -202,8 +228,9 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
     lines.append(f"  patch_rd_speedup: {median_samples['patch_rd_speedup'][0]}")
     lines.append(f"  se_doubling_decay_fraction: {median_samples['se_doubling_decay_fraction']}")
 
-    # Run simulation parameters
-    current_horizon = config["simulation"]["current_horizon"]
+    # Run simulation parameters (allow per-forecaster overrides)
+    current_horizon = forecaster_config.get("current_horizon", config["simulation"]["current_horizon"])
+    current_year = forecaster_config.get("current_year", config["simulation"].get("current_year", 2025.25))
     dt = config["simulation"]["dt"]
     compute_decrease_date = config["simulation"]["compute_decrease_date"]
     human_alg_progress_decrease_date = config["simulation"]["human_alg_progress_decrease_date"]
@@ -211,33 +238,41 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
 
     # Store trajectory data for plotting
     trajectory_data = {}
+    arrival_years = {}  # Store SC arrival year per growth type
 
-    # Run both exponential and superexponential trajectories
-    for growth_type in ["Exponential", "Superexponential"]:
+    # Run exponential, superexponential, and subexponential trajectories
+    for growth_type in ["Exponential", "Superexponential", "Subexponential"]:
         # Set growth type flags
         if growth_type == "Exponential":
             median_samples["is_exponential"] = np.array([True])
             median_samples["is_superexponential"] = np.array([False])
             median_samples["is_subexponential"] = np.array([False])
-        else:
+        elif growth_type == "Superexponential":
             median_samples["is_exponential"] = np.array([False])
             median_samples["is_superexponential"] = np.array([True])
             median_samples["is_subexponential"] = np.array([False])
+        else:  # Subexponential
+            median_samples["is_exponential"] = np.array([False])
+            median_samples["is_superexponential"] = np.array([False])
+            median_samples["is_subexponential"] = np.array([True])
 
         lines.append(f"\n--- {growth_type} Growth ---")
 
         # Run forward simulation
         ending_times, forward_trajectories = calculate_sc_arrival_year_with_trajectories(
             median_samples, current_horizon, dt,
-            compute_decrease_date, human_alg_progress_decrease_date, max_simulation_years
+            compute_decrease_date, human_alg_progress_decrease_date, max_simulation_years,
+            current_year=current_year
         )
 
         # Run backcast
         backcast_trajs = backcast_trajectories(
-            median_samples, current_horizon, dt, backcast_years=5
+            median_samples, current_horizon, dt, backcast_years=5,
+            current_year=current_year
         )
 
         arrival_year = ending_times[0]
+        arrival_years[growth_type.lower()] = arrival_year  # Store for CSV export
         fore_traj = forward_trajectories[0] if forward_trajectories else []
         back_traj = backcast_trajs[0] if backcast_trajs else []
 
@@ -260,7 +295,27 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
                 'horizons': np.array(combined_h)[order]
             }
 
+        # arrival_year is internal time (without announcement delay)
+        announcement_delay_years = median_samples['announcement_delay'][0] / 12
         lines.append(f"SC Arrival: {format_year_month(arrival_year)}")
+
+        # Find human-cost-parity point (when horizon first reaches h_SC requirement)
+        h_SC_threshold_minutes = median_samples['h_SC'][0] * 60 * 167  # Convert work-months to minutes
+        human_cost_parity_year_announced = None  # Trajectory times include announcement delay
+        if fore_traj:
+            for t, h in fore_traj:
+                if h >= h_SC_threshold_minutes:
+                    human_cost_parity_year_announced = t
+                    break
+
+        if human_cost_parity_year_announced is not None:
+            # Convert HCP to internal time (subtract announcement delay) to match SC arrival
+            human_cost_parity_year = human_cost_parity_year_announced - announcement_delay_years
+            lines.append(f"Human-Cost-Parity: {format_year_month(human_cost_parity_year)}")
+            # Calculate days between human-cost-parity and SC arrival (both in internal time)
+            days_to_sc = (arrival_year - human_cost_parity_year) * 365.25
+            lines.append(f"Days from Human-Cost-Parity to SC: {days_to_sc:.1f} days")
+
         lines.append(f"\nTrajectory (selected points):")
         lines.append(f"  {'Year':<12} {'Horizon':<20}")
         lines.append(f"  {'-'*12} {'-'*20}")
@@ -283,7 +338,28 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
 
     result = "\n".join(lines)
     print(result)
-    return result, trajectory_data
+
+    # Build structured data for CSV export
+    structured_data = {
+        "forecaster_name": forecaster_name,
+        # SC arrival years
+        "sc_arrival_year_exponential": arrival_years.get("exponential"),
+        "sc_arrival_year_superexponential": arrival_years.get("superexponential"),
+        "sc_arrival_year_subexponential": arrival_years.get("subexponential"),
+        # Median parameters
+        "h_SC_work_months": median_samples['h_SC'][0],
+        "T_t_doubling_time_months": median_samples['T_t'][0],
+        "cost_speed_months": median_samples['cost_speed'][0],
+        "announcement_delay_months": median_samples['announcement_delay'][0],
+        "present_prog_multiplier": median_samples['present_prog_multiplier'][0],
+        "SC_prog_multiplier": median_samples['SC_prog_multiplier'][0],
+        "patch_rd_speedup": median_samples['patch_rd_speedup'][0],
+        "se_doubling_decay_fraction": median_samples['se_doubling_decay_fraction'],
+        # Trajectory data will be added per growth type
+        "trajectory_data": trajectory_data,
+    }
+
+    return result, trajectory_data, structured_data
 
 
 def calculate_base_time(samples: dict, current_horizon: float) -> tuple[np.ndarray, list]:
@@ -448,22 +524,17 @@ def get_compute_rate(t: float, compute_decrease_date: float) -> float:
     return 0.5 if t >= compute_decrease_date else 1.0
 
     
-def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float) -> tuple[np.ndarray, list]:
+def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, current_year: float = 2025.25) -> tuple[np.ndarray, list]:
     """Calculate time to reach SC incorporating intermediate speedups and compute scaling, returning both ending times and trajectories."""
     # First calculate base time including cost-and-speed adjustment and get horizon mappings
     base_time_in_months, horizon_mappings = calculate_base_time(samples, current_horizon)
     n_sims = len(base_time_in_months)
-    
+
     # Initialize array for actual times
     ending_times = np.zeros(n_sims)
-    
+
     # Store trajectories for each simulation
     trajectories = []
-    
-    # Get current date as decimal year
-    # current_date = datetime.now()
-    # current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
-    current_year = 2025.25
     
     # Convert dt from days to months
     dt = dt / 30.5
@@ -504,8 +575,10 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             
             # Get compute rate for current time (not affected by intermediate speedups)
             compute_rate = get_compute_rate(time, compute_decrease_date)
-            # Total rate is mean of algorithmic and compute rates
-            total_rate = (v_algorithmic + compute_rate) / 2
+            # Total rate is weighted combination of algorithmic and compute rates
+            # software_progress_share determines the weighting (0.5 = equal weighting = original behavior)
+            sw_share = samples["software_progress_share"][i]
+            total_rate = sw_share * v_algorithmic + (1 - sw_share) * compute_rate
             
             # Update progress and time
             progress += dt * total_rate
@@ -596,20 +669,15 @@ def backcast_base_time(samples: dict, current_horizon: float, dt: float, backcas
     
     return horizon_mappings
 
-def backcast_trajectories(samples: dict, current_horizon: float, dt: float, backcast_years: int = 5) -> tuple[np.ndarray, list]:
+def backcast_trajectories(samples: dict, current_horizon: float, dt: float, backcast_years: int = 5, current_year: float = 2025.25) -> tuple[np.ndarray, list]:
     """Backcast trajectories for each forecaster."""
     # First calculate base time including cost-and-speed adjustment and get horizon mappings
     base_time_in_months, _ = calculate_base_time(samples, current_horizon)
     horizon_mappings = backcast_base_time(samples, current_horizon, dt, backcast_years)
     n_sims = len(base_time_in_months) # EL: why len(base_time_in_months)?
-    
+
     # Store trajectories for each simulation
     trajectories = []
-
-    # Get current date as decimal year
-    # current_date = datetime.now()
-    # current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
-    current_year = 2025.25
     
     # Convert dt from days to months
     dt = dt / 30.5
@@ -640,9 +708,14 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             else:
                 v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
+            # For backcast, compute_rate is 1 (baseline)
+            compute_rate = 1
+            # Total rate is weighted combination of algorithmic and compute rates
+            sw_share = samples["software_progress_share"][i]
+            total_rate = sw_share * v_algorithmic + (1 - sw_share) * compute_rate
+
             # Update progress and time
-            # import pdb; pdb.set_trace()
-            progress -= dt * v_algorithmic
+            progress -= dt * total_rate
             time -= dt / 12  # Convert months to years
 
         trajectories.append(trajectory)
@@ -693,8 +766,255 @@ def get_forecaster_growth_type(samples: dict) -> str | None:
     return None
 
 
-def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[plt.Figure, dict, dict, dict]:
+def calculate_hcp_distributions(
+    all_forecaster_trajectories: dict,
+    all_forecaster_results: dict,
+    all_forecaster_samples: dict,
+    config: dict,
+    output_dir: Path
+) -> dict:
+    """Calculate Human-Cost-Parity (HCP) distributions for all forecasters.
+
+    For each simulation trajectory, finds when the horizon first reaches the h_SC
+    threshold (HCP point) and calculates:
+    - When HCP is achieved (calendar year)
+    - Time gap from HCP to SC arrival (in days)
+
+    Parameters
+    ----------
+    all_forecaster_trajectories : dict
+        Dictionary mapping forecaster names to lists of trajectories
+    all_forecaster_results : dict
+        Dictionary mapping forecaster names to SC arrival times
+    all_forecaster_samples : dict
+        Dictionary mapping forecaster names to sampled parameters
+    config : dict
+        Configuration dictionary
+    output_dir : Path
+        Output directory for saving results
+
+    Returns
+    -------
+    dict
+        Dictionary with HCP distribution data for each forecaster
+    """
+    hcp_data = {}
+
+    for forecaster_name in all_forecaster_trajectories.keys():
+        trajectories = all_forecaster_trajectories[forecaster_name]
+        sc_arrivals = all_forecaster_results[forecaster_name]
+        samples = all_forecaster_samples[forecaster_name]
+
+        # Get h_SC threshold in minutes for each simulation
+        h_SC_thresholds = samples['h_SC'] * 60 * 167  # Convert work-months to minutes
+
+        hcp_years = []
+        hcp_to_sc_days = []
+
+        for i, trajectory in enumerate(trajectories):
+            if not trajectory:
+                hcp_years.append(np.nan)
+                hcp_to_sc_days.append(np.nan)
+                continue
+
+            h_SC_threshold = h_SC_thresholds[i]
+            sc_arrival = sc_arrivals[i]  # Internal time (without announcement delay)
+            announcement_delay_years = samples['announcement_delay'][i] / 12
+
+            # Find when horizon first reaches h_SC threshold
+            hcp_year_announced = None  # Trajectory times include announcement delay
+            for t, h in trajectory:
+                if h >= h_SC_threshold:
+                    hcp_year_announced = t
+                    break
+
+            if hcp_year_announced is not None:
+                # Convert HCP to internal time (subtract announcement delay) to match SC arrival
+                hcp_year = hcp_year_announced - announcement_delay_years
+                hcp_years.append(hcp_year)
+                # Calculate days from HCP to SC arrival (both in internal time)
+                days_to_sc = (sc_arrival - hcp_year) * 365.25
+                hcp_to_sc_days.append(days_to_sc)
+            else:
+                hcp_years.append(np.nan)
+                hcp_to_sc_days.append(np.nan)
+
+        hcp_years = np.array(hcp_years)
+        hcp_to_sc_days = np.array(hcp_to_sc_days)
+
+        # Filter out NaN values for statistics
+        valid_hcp_years = hcp_years[~np.isnan(hcp_years)]
+        valid_hcp_to_sc_days = hcp_to_sc_days[~np.isnan(hcp_to_sc_days)]
+
+        hcp_data[forecaster_name] = {
+            'hcp_years': hcp_years,
+            'hcp_to_sc_days': hcp_to_sc_days,
+            'valid_hcp_years': valid_hcp_years,
+            'valid_hcp_to_sc_days': valid_hcp_to_sc_days,
+        }
+
+    # Create plots
+    fig_hcp_year, axes_year = plt.subplots(1, 2, figsize=(14, 5))
+    fig_hcp_gap, axes_gap = plt.subplots(1, 2, figsize=(14, 5))
+
+    colors = plt.cm.tab10.colors
+
+    # Plot HCP arrival year distributions
+    ax_pdf_year = axes_year[0]
+    ax_cdf_year = axes_year[1]
+
+    for idx, (forecaster_name, data) in enumerate(hcp_data.items()):
+        valid_years = data['valid_hcp_years']
+        if len(valid_years) < 2:
+            continue
+        color = colors[idx % len(colors)]
+
+        # PDF using KDE
+        kde = gaussian_kde(valid_years)
+        x_range = np.linspace(valid_years.min() - 0.5, valid_years.max() + 0.5, 200)
+        ax_pdf_year.plot(x_range, kde(x_range), label=forecaster_name, color=color)
+        ax_pdf_year.fill_between(x_range, kde(x_range), alpha=0.2, color=color)
+
+        # CDF
+        sorted_years = np.sort(valid_years)
+        cdf = np.arange(1, len(sorted_years) + 1) / len(sorted_years)
+        ax_cdf_year.plot(sorted_years, cdf, label=forecaster_name, color=color)
+
+    ax_pdf_year.set_xlabel('Year')
+    ax_pdf_year.set_ylabel('Density')
+    ax_pdf_year.set_title('Human-Cost-Parity Arrival Year (PDF)')
+    ax_pdf_year.legend()
+    ax_pdf_year.grid(True, alpha=0.3)
+
+    ax_cdf_year.set_xlabel('Year')
+    ax_cdf_year.set_ylabel('Cumulative Probability')
+    ax_cdf_year.set_title('Human-Cost-Parity Arrival Year (CDF)')
+    ax_cdf_year.legend()
+    ax_cdf_year.grid(True, alpha=0.3)
+
+    fig_hcp_year.suptitle('Distribution of Human-Cost-Parity (HCP) Arrival Year', fontsize=14)
+    fig_hcp_year.tight_layout()
+    fig_hcp_year.savefig(output_dir / "hcp_arrival_year_distribution.png", dpi=300, bbox_inches="tight")
+    plt.close(fig_hcp_year)
+
+    # Plot HCP-to-SC gap distributions
+    ax_pdf_gap = axes_gap[0]
+    ax_cdf_gap = axes_gap[1]
+
+    for idx, (forecaster_name, data) in enumerate(hcp_data.items()):
+        valid_days = data['valid_hcp_to_sc_days']
+        if len(valid_days) < 2:
+            continue
+        color = colors[idx % len(colors)]
+
+        # PDF using KDE
+        kde = gaussian_kde(valid_days)
+        x_range = np.linspace(max(0, valid_days.min() - 10), valid_days.max() + 10, 200)
+        ax_pdf_gap.plot(x_range, kde(x_range), label=forecaster_name, color=color)
+        ax_pdf_gap.fill_between(x_range, kde(x_range), alpha=0.2, color=color)
+
+        # CDF
+        sorted_days = np.sort(valid_days)
+        cdf = np.arange(1, len(sorted_days) + 1) / len(sorted_days)
+        ax_cdf_gap.plot(sorted_days, cdf, label=forecaster_name, color=color)
+
+    ax_pdf_gap.set_xlabel('Days')
+    ax_pdf_gap.set_ylabel('Density')
+    ax_pdf_gap.set_title('HCP to SC Gap (PDF)')
+    ax_pdf_gap.legend()
+    ax_pdf_gap.grid(True, alpha=0.3)
+
+    ax_cdf_gap.set_xlabel('Days')
+    ax_cdf_gap.set_ylabel('Cumulative Probability')
+    ax_cdf_gap.set_title('HCP to SC Gap (CDF)')
+    ax_cdf_gap.legend()
+    ax_cdf_gap.grid(True, alpha=0.3)
+
+    fig_hcp_gap.suptitle('Distribution of Time from Human-Cost-Parity to SC Arrival', fontsize=14)
+    fig_hcp_gap.tight_layout()
+    fig_hcp_gap.savefig(output_dir / "hcp_to_sc_gap_distribution.png", dpi=300, bbox_inches="tight")
+    plt.close(fig_hcp_gap)
+
+    # Export to CSV
+    csv_rows = []
+    for forecaster_name, data in hcp_data.items():
+        for i in range(len(data['hcp_years'])):
+            csv_rows.append({
+                'forecaster': forecaster_name,
+                'simulation_id': i,
+                'hcp_year': data['hcp_years'][i],
+                'hcp_to_sc_days': data['hcp_to_sc_days'][i],
+            })
+
+    import pandas as pd
+    df = pd.DataFrame(csv_rows)
+    df.to_csv(output_dir / "hcp_distributions.csv", index=False)
+
+    # Also export summary statistics
+    summary_rows = []
+    for forecaster_name, data in hcp_data.items():
+        valid_years = data['valid_hcp_years']
+        valid_days = data['valid_hcp_to_sc_days']
+        sc_arrivals = all_forecaster_results[forecaster_name]
+
+        if len(valid_years) > 0:
+            summary_rows.append({
+                'forecaster': forecaster_name,
+                'sc_year_10th': np.percentile(sc_arrivals, 10),
+                'sc_year_25th': np.percentile(sc_arrivals, 25),
+                'sc_year_50th': np.percentile(sc_arrivals, 50),
+                'sc_year_75th': np.percentile(sc_arrivals, 75),
+                'sc_year_90th': np.percentile(sc_arrivals, 90),
+                'sc_year_mean': np.mean(sc_arrivals),
+                'sc_year_std': np.std(sc_arrivals),
+                'hcp_year_10th': np.percentile(valid_years, 10),
+                'hcp_year_25th': np.percentile(valid_years, 25),
+                'hcp_year_50th': np.percentile(valid_years, 50),
+                'hcp_year_75th': np.percentile(valid_years, 75),
+                'hcp_year_90th': np.percentile(valid_years, 90),
+                'hcp_year_mean': np.mean(valid_years),
+                'hcp_year_std': np.std(valid_years),
+                'hcp_to_sc_days_10th': np.percentile(valid_days, 10),
+                'hcp_to_sc_days_25th': np.percentile(valid_days, 25),
+                'hcp_to_sc_days_50th': np.percentile(valid_days, 50),
+                'hcp_to_sc_days_75th': np.percentile(valid_days, 75),
+                'hcp_to_sc_days_90th': np.percentile(valid_days, 90),
+                'hcp_to_sc_days_mean': np.mean(valid_days),
+                'hcp_to_sc_days_std': np.std(valid_days),
+                'n_valid_samples': len(valid_years),
+            })
+
+    df_summary = pd.DataFrame(summary_rows)
+    df_summary.to_csv(output_dir / "hcp_distributions_summary.csv", index=False)
+
+    print(f"\nSaved HCP distribution plots and CSVs to {output_dir}")
+    print("\nHCP Distribution Summary:")
+    print("=" * 80)
+    for forecaster_name, data in hcp_data.items():
+        valid_years = data['valid_hcp_years']
+        valid_days = data['valid_hcp_to_sc_days']
+        if len(valid_years) > 0:
+            print(f"\n{forecaster_name}:")
+            print(f"  HCP Arrival Year: median={np.median(valid_years):.2f}, "
+                  f"10th={np.percentile(valid_years, 10):.2f}, "
+                  f"90th={np.percentile(valid_years, 90):.2f}")
+            print(f"  HCP-to-SC Gap: median={np.median(valid_days):.1f} days, "
+                  f"10th={np.percentile(valid_days, 10):.1f}, "
+                  f"90th={np.percentile(valid_days, 90):.1f}")
+
+    return hcp_data
+
+
+def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: bool = False) -> tuple[plt.Figure, dict, dict, dict]:
     """Run simplified SC simulation and plot results.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to the YAML configuration file
+    minimal : bool
+        If True, only generate: overall PDF/CDF plots and March 2027 illustrative
+        combined trajectories (PNG + CSV) for each forecaster
 
     Returns
     -------
@@ -728,17 +1048,72 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     print("="*60)
     median_results = []
     median_trajectory_data = {}  # forecaster_name -> {growth_type: trajectory_dict}
+    median_structured_data = []  # list of structured data dicts for CSV export
     for forecaster_key, forecaster_config in config["forecasters"].items():
-        result, traj_data = run_median_trajectory(config, forecaster_config, forecaster_config["name"])
+        result, traj_data, structured_data = run_median_trajectory(config, forecaster_config, forecaster_config["name"])
         median_results.append(result)
         median_trajectory_data[forecaster_config["name"]] = traj_data
+        median_structured_data.append(structured_data)
 
-    # Save median trajectory results to file
+    # Save median trajectory results to txt file
     with open(output_dir / "median_trajectories.txt", "w") as f:
         f.write("MEDIAN TRAJECTORY RESULTS\n")
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("\n".join(median_results))
     print(f"Saved median trajectories to {output_dir / 'median_trajectories.txt'}")
+
+    # Save median trajectory summary to CSV
+    csv_rows = []
+    prev_exp = None
+    prev_superexp = None
+    prev_subexp = None
+    for data in median_structured_data:
+        curr_exp = data["sc_arrival_year_exponential"]
+        curr_superexp = data["sc_arrival_year_superexponential"]
+        curr_subexp = data["sc_arrival_year_subexponential"]
+        row = {
+            "forecaster_name": data["forecaster_name"],
+            "sc_arrival_year_exponential": curr_exp,
+            "diff_exp_from_prev": curr_exp - prev_exp if prev_exp is not None else None,
+            "sc_arrival_year_superexponential": curr_superexp,
+            "diff_superexp_from_prev": curr_superexp - prev_superexp if prev_superexp is not None else None,
+            "sc_arrival_year_subexponential": curr_subexp,
+            "diff_subexp_from_prev": curr_subexp - prev_subexp if prev_subexp is not None else None,
+            "h_SC_work_months": data["h_SC_work_months"],
+            "T_t_doubling_time_months": data["T_t_doubling_time_months"],
+            "cost_speed_months": data["cost_speed_months"],
+            "announcement_delay_months": data["announcement_delay_months"],
+            "present_prog_multiplier": data["present_prog_multiplier"],
+            "SC_prog_multiplier": data["SC_prog_multiplier"],
+            "patch_rd_speedup": data["patch_rd_speedup"],
+            "se_doubling_decay_fraction": data["se_doubling_decay_fraction"],
+        }
+        csv_rows.append(row)
+        prev_exp = curr_exp
+        prev_superexp = curr_superexp
+        prev_subexp = curr_subexp
+    df_summary = pd.DataFrame(csv_rows)
+    df_summary.to_csv(output_dir / "median_trajectories.csv", index=False)
+    print(f"Saved median trajectories summary to {output_dir / 'median_trajectories.csv'}")
+
+    # Save detailed trajectory points to separate CSV
+    trajectory_rows = []
+    for data in median_structured_data:
+        forecaster = data["forecaster_name"]
+        traj_data = data["trajectory_data"]
+        for growth_type, traj in traj_data.items():
+            times = traj["times"]
+            horizons = traj["horizons"]
+            for t, h in zip(times, horizons):
+                trajectory_rows.append({
+                    "forecaster_name": forecaster,
+                    "growth_type": growth_type,
+                    "year": t,
+                    "horizon_minutes": h
+                })
+    df_points = pd.DataFrame(trajectory_rows)
+    df_points.to_csv(output_dir / "median_trajectory_points.csv", index=False)
+    print(f"Saved detailed trajectory points to {output_dir / 'median_trajectory_points.csv'}")
 
     # Generate simple median trajectory comparison plots for each growth type
     for growth_type in ["exponential", "superexponential"]:
@@ -779,14 +1154,19 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             all_forecaster_samples[name] = samples
             print(f"Generated {len(samples)} samples for {name}")
 
+            # Get per-forecaster overrides for current_horizon and current_year
+            current_horizon = forecaster_config.get("current_horizon", config["simulation"]["current_horizon"])
+            current_year = forecaster_config.get("current_year", config["simulation"].get("current_year", 2025.25))
+
             # Calculate time to SC with trajectories
             results, trajectories = calculate_sc_arrival_year_with_trajectories(
                 samples,
-                config["simulation"]["current_horizon"],
+                current_horizon,
                 config["simulation"]["dt"],
                 config["simulation"]["compute_decrease_date"],
                 config["simulation"]["human_alg_progress_decrease_date"],
-                config["simulation"]["max_simulation_years"]
+                config["simulation"]["max_simulation_years"],
+                current_year=current_year
             )
 
             all_forecaster_results[name] = results
@@ -796,9 +1176,10 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             print(f"Generating backcasted trajectories for {name}...")
             backcast_trajectories_result = backcast_trajectories(
                 samples,
-                config["simulation"]["current_horizon"],
+                current_horizon,
                 config["simulation"]["dt"],
-                backcast_years=5
+                backcast_years=5,
+                current_year=current_year
             )
             all_forecaster_backcast_trajectories[name] = backcast_trajectories_result
 
@@ -820,101 +1201,115 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     fig_cdf.savefig(output_dir / "simple_combined_headline_cdf.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cdf)
 
+    # Calculate and save HCP distributions
+    print("\nCalculating HCP distributions...")
+    hcp_data = calculate_hcp_distributions(
+        all_forecaster_trajectories,
+        all_forecaster_results,
+        all_forecaster_samples,
+        config,
+        output_dir
+    )
+
     monthly_central_trajectories_by_forecaster = {}
     for forecaster_name in all_forecaster_results.keys():
         # --- Figures that are independent of a specific SC month ---
-        fig_backcasted_colored = plot_backcasted_trajectories(
-            all_forecaster_backcast_trajectories,
-            all_forecaster_samples,
-            config,
-            color_by_growth_type=True,
-            forecaster_filter=[forecaster_name],
-        )
+        if not minimal:
+            fig_backcasted_colored = plot_backcasted_trajectories(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_samples,
+                config,
+                color_by_growth_type=True,
+                forecaster_filter=[forecaster_name],
+            )
 
-        fig_backcasted_red = plot_backcasted_trajectories(
-            all_forecaster_backcast_trajectories,
-            all_forecaster_samples,
-            config,
-            color_by_growth_type=False,
-            forecaster_filter=[forecaster_name],
-        )
+            fig_backcasted_red = plot_backcasted_trajectories(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_samples,
+                config,
+                color_by_growth_type=False,
+                forecaster_filter=[forecaster_name],
+            )
 
-        # # Commented out: unconditional combined trajectories
-        # fig_combined_colored, unconditional_central_path = plot_combined_trajectories(
-        #     all_forecaster_backcast_trajectories,
-        #     all_forecaster_trajectories,
-        #     all_forecaster_samples,
-        #     config,
-        #     color_by_growth_type=True,
-        #     plot_median_curve=True,
-        #     forecaster_filter=[forecaster_name],
-        # )
+            # # Commented out: unconditional combined trajectories
+            # fig_combined_colored, unconditional_central_path = plot_combined_trajectories(
+            #     all_forecaster_backcast_trajectories,
+            #     all_forecaster_trajectories,
+            #     all_forecaster_samples,
+            #     config,
+            #     color_by_growth_type=True,
+            #     plot_median_curve=True,
+            #     forecaster_filter=[forecaster_name],
+            # )
 
-        # fig_combined_red, _ = plot_combined_trajectories(
-        #     all_forecaster_backcast_trajectories,
-        #     all_forecaster_trajectories,
-        #     all_forecaster_samples,
-        #     config,
-        #     color_by_growth_type=False,
-        #     forecaster_filter=[forecaster_name],
-        # )
+            # fig_combined_red, _ = plot_combined_trajectories(
+            #     all_forecaster_backcast_trajectories,
+            #     all_forecaster_trajectories,
+            #     all_forecaster_samples,
+            #     config,
+            #     color_by_growth_type=False,
+            #     forecaster_filter=[forecaster_name],
+            # )
 
-        # Save and close the month-independent figures
-        fig_backcasted_colored.savefig(
-            backcasted_dir / f"backcasted_trajectories_{forecaster_name}.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-        fig_backcasted_red.savefig(
-            backcasted_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
-        # # Commented out: saving unconditional combined trajectories
-        # fig_combined_colored.savefig(
-        #     combined_dir / f"combined_trajectories_{forecaster_name}.png",
-        #     dpi=300,
-        #     bbox_inches="tight",
-        # )
-        # # Also save unconditional all trajectories to central_trajectories folder
-        # fig_combined_colored.savefig(
-        #     central_dir / f"all_trajectories_unconditional_{forecaster_name}.png",
-        #     dpi=300,
-        #     bbox_inches="tight",
-        # )
-        # fig_combined_red.savefig(
-        #     combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
-        #     dpi=300,
-        #     bbox_inches="tight",
-        # )
+            # Save and close the month-independent figures
+            fig_backcasted_colored.savefig(
+                backcasted_dir / f"backcasted_trajectories_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            fig_backcasted_red.savefig(
+                backcasted_dir / f"backcasted_trajectories_red_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            # # Commented out: saving unconditional combined trajectories
+            # fig_combined_colored.savefig(
+            #     combined_dir / f"combined_trajectories_{forecaster_name}.png",
+            #     dpi=300,
+            #     bbox_inches="tight",
+            # )
+            # # Also save unconditional all trajectories to central_trajectories folder
+            # fig_combined_colored.savefig(
+            #     central_dir / f"all_trajectories_unconditional_{forecaster_name}.png",
+            #     dpi=300,
+            #     bbox_inches="tight",
+            # )
+            # fig_combined_red.savefig(
+            #     combined_dir / f"combined_trajectories_red_{forecaster_name}.png",
+            #     dpi=300,
+            #     bbox_inches="tight",
+            # )
 
-        plt.close(fig_backcasted_colored)
-        plt.close(fig_backcasted_red)
-        # plt.close(fig_combined_colored)
-        # plt.close(fig_combined_red)
+            plt.close(fig_backcasted_colored)
+            plt.close(fig_backcasted_red)
+            # plt.close(fig_combined_colored)
+            # plt.close(fig_combined_red)
 
         # --- Figures filtered by specific SC arrival months ---
-        target_months = [
-            "November 2026",
-            "January 2027",
-            "March 2027",
-            "April 2027",
-            "May 2027",
-            "June 2027",
-            "August 2027",
-            "May 2028",
-            "July 2028",
-            "September 2028",
-            "April 2029",
-            "November 2029",
-            "January 2030",
-            # "March 2028",
-            # "March 2029",
-            # "March 2030",
-            # "September 2027",
-            # "September 2029",
-            # "September 2030",
-        ]
+        if minimal:
+            target_months = ["March 2027"]
+        else:
+            target_months = [
+                "November 2026",
+                "January 2027",
+                "March 2027",
+                "April 2027",
+                "May 2027",
+                "June 2027",
+                "August 2027",
+                "May 2028",
+                "July 2028",
+                "September 2028",
+                "April 2029",
+                "November 2029",
+                "January 2030",
+                # "March 2028",
+                # "March 2029",
+                # "March 2030",
+                # "September 2027",
+                # "September 2029",
+                # "September 2030",
+            ]
 
         # Collect central trajectories per month for later comparison
         central_trajs_by_month: dict[str, dict] = {}
@@ -926,15 +1321,16 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         for sc_month_str in target_months:
             month_slug = sc_month_str.lower().replace(" ", "_")  # e.g. "march_2028"
 
-            # Trajectory plot filtered by SC month
-            fig_trajectories = plot_trajectories_sc_month(
-                all_forecaster_results,
-                all_forecaster_trajectories,
-                all_forecaster_samples,
-                config,
-                sc_month_str=sc_month_str,
-                forecaster_filter=[forecaster_name],
-            )
+            if not minimal:
+                # Trajectory plot filtered by SC month
+                fig_trajectories = plot_trajectories_sc_month(
+                    all_forecaster_results,
+                    all_forecaster_trajectories,
+                    all_forecaster_samples,
+                    config,
+                    sc_month_str=sc_month_str,
+                    forecaster_filter=[forecaster_name],
+                )
 
             # Combined trajectory plots filtered by SC month
             fig_combined_month, central_path = plot_combined_trajectories_sc_month(
@@ -952,17 +1348,18 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             if central_path is not None:
                 central_trajs_by_month[sc_month_str] = central_path
 
-            fig_combined_month_median, _ = plot_combined_trajectories_sc_month(
-                all_forecaster_backcast_trajectories,
-                all_forecaster_trajectories,
-                all_forecaster_samples,
-                all_forecaster_results,
-                config,
-                sc_month_str=sc_month_str,
-                color_by_growth_type=True,
-                plot_median_curve=True,
-                forecaster_filter=[forecaster_name],
-            )
+            if not minimal:
+                fig_combined_month_median, _ = plot_combined_trajectories_sc_month(
+                    all_forecaster_backcast_trajectories,
+                    all_forecaster_trajectories,
+                    all_forecaster_samples,
+                    all_forecaster_results,
+                    config,
+                    sc_month_str=sc_month_str,
+                    color_by_growth_type=True,
+                    plot_median_curve=True,
+                    forecaster_filter=[forecaster_name],
+                )
 
             fig_combined_month_illustrative, _ = plot_combined_trajectories_sc_month(
                 all_forecaster_backcast_trajectories,
@@ -977,27 +1374,40 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             )
 
             # --- Save the month-specific figures ---
-            fig_trajectories.savefig(
-                forecasted_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
-                dpi=300,
-                bbox_inches="tight",
-            )
-            # Save all_trajectories to central_trajectories folder
-            fig_combined_month.savefig(
-                central_dir / f"all_trajectories_{month_slug}_{forecaster_name}.png",
-                dpi=300,
-                bbox_inches="tight",
-            )
+            if not minimal:
+                fig_trajectories.savefig(
+                    forecasted_dir / f"{month_slug}_trajectories_{forecaster_name}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                # Save all_trajectories to central_trajectories folder
+                fig_combined_month.savefig(
+                    central_dir / f"all_trajectories_{month_slug}_{forecaster_name}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
             fig_combined_month_illustrative.savefig(
                 combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
 
+            # Save central trajectory data as CSV
+            if central_path is not None:
+                central_df = pd.DataFrame({
+                    'calendar_time': central_path['times'],
+                    'time_horizon_minutes': central_path['horizons'],
+                })
+                central_df.to_csv(
+                    combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
+                    index=False,
+                )
+
             # Close month-specific figures to free memory
-            plt.close(fig_trajectories)
+            if not minimal:
+                plt.close(fig_trajectories)
+                plt.close(fig_combined_month_median)
             plt.close(fig_combined_month)
-            plt.close(fig_combined_month_median)
             plt.close(fig_combined_month_illustrative)
 
         monthly_central_trajectories_by_forecaster[forecaster_name] = central_trajs_by_month
@@ -1005,7 +1415,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
         # --------------------------------------------------------
         # Plot comparison of central trajectories across months
         # --------------------------------------------------------
-        if central_trajs_by_month:
+        if central_trajs_by_month and not minimal:
             central_list = sorted(central_trajs_by_month.items())  # list[(label, traj)]
             fig_cent_compare = plot_central_trajectories_comparison(
                 central_list,
@@ -1022,198 +1432,199 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
             plt.close(fig_cent_compare)
         print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
 
-    # --------------------------------------------------------
-    # Plot median params vs central trajectories comparison
-    # Dynamically determine filter months based on median SC arrival times
-    # This is plotted FIRST (after per-forecaster plots) for visibility
-    # --------------------------------------------------------
-    # Detect forecaster naming pattern: look for patched vs non-patched variants
-    forecaster_names_list = list(all_forecaster_results.keys())
+    if not minimal:
+        # --------------------------------------------------------
+        # Plot median params vs central trajectories comparison
+        # Dynamically determine filter months based on median SC arrival times
+        # This is plotted FIRST (after per-forecaster plots) for visibility
+        # --------------------------------------------------------
+        # Detect forecaster naming pattern: look for patched vs non-patched variants
+        forecaster_names_list = list(all_forecaster_results.keys())
 
-    # Check if we're using patched rd speedup variants
-    has_patched = any("patched_rd_speedup" in name.lower() for name in forecaster_names_list)
+        # Check if we're using patched rd speedup variants
+        has_patched = any("patched_rd_speedup" in name.lower() for name in forecaster_names_list)
 
-    if has_patched:
-        # Use patched variant naming
-        base_name = "Eli_patched_rd_speedup"
-        superexp_forecaster = "Eli_superexp_only_patched_rd_speedup"
-        exp_forecaster = "Eli_exp_only_patched_rd_speedup"
-        mixed_forecaster = "Eli_patched_rd_speedup"
-        plot_title = "Backcasts with AI R&D interpolation fixed (Eli's distributions)"
-    else:
-        # Use original naming
-        base_name = "Eli"
-        superexp_forecaster = "Eli_superexp_only"
-        exp_forecaster = "Eli_exp_only"
-        mixed_forecaster = "Eli"
-        plot_title = "Trajectory with Median Parameters vs Central Trajectories (Eli's distributions)"
+        if has_patched:
+            # Use patched variant naming
+            base_name = "Eli_patched_rd_speedup"
+            superexp_forecaster = "Eli_superexp_only_patched_rd_speedup"
+            exp_forecaster = "Eli_exp_only_patched_rd_speedup"
+            mixed_forecaster = "Eli_patched_rd_speedup"
+            plot_title = "Backcasts with AI R&D interpolation fixed (Eli's distributions)"
+        else:
+            # Use original naming
+            base_name = "Eli"
+            superexp_forecaster = "Eli_superexp_only"
+            exp_forecaster = "Eli_exp_only"
+            mixed_forecaster = "Eli"
+            plot_title = "Trajectory with Median Parameters vs Central Trajectories (Eli's distributions)"
 
-    # Fixed median SC arrival months for Eli patched_rd_speedup forecasters
-    if has_patched:
-        superexp_month = "April 2027"
-        exp_month = "April 2029"
-        mixed_month = "May 2028"
-    else:
-        superexp_month = "November 2026"
-        exp_month = "July 2028"
-        mixed_month = "August 2027"
+        # Fixed median SC arrival months for Eli patched_rd_speedup forecasters
+        if has_patched:
+            superexp_month = "April 2027"
+            exp_month = "April 2029"
+            mixed_month = "May 2028"
+        else:
+            superexp_month = "November 2026"
+            exp_month = "July 2028"
+            mixed_month = "August 2027"
 
-    print(f"Using SC arrival months: superexp={superexp_month}, exp={exp_month}, mixed={mixed_month}")
+        print(f"Using SC arrival months: superexp={superexp_month}, exp={exp_month}, mixed={mixed_month}")
 
-    fig_median_vs_central = plot_median_vs_central_comparison(
-        median_trajectory_data,
-        monthly_central_trajectories_by_forecaster,
-        config,
-        forecaster_name="Eli",
-        superexp_forecaster_name=superexp_forecaster,
-        exp_forecaster_name=exp_forecaster,
-        mixed_forecaster_name=mixed_forecaster,
-        superexp_sc_month=superexp_month,
-        exp_sc_month=exp_month,
-        mixed_sc_month=mixed_month,
-        overlay_external_data=True,
-        title=plot_title,
-    )
-    fig_median_vs_central.savefig(
-        central_dir / f"median_vs_central_comparison_{base_name}.png",
-        dpi=300,
-        bbox_inches="tight",
-    )
-    plt.close(fig_median_vs_central)
-    print("Saved median vs central comparison plot to central_trajectories folder")
-
-    for sc_month_str in target_months:
-        # Build list of trajectories for forecasters that have data for this month
-        monthly_trajs = [
-            (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
-            for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
-            if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
-        ]
-        if not monthly_trajs:
-            print(f"Skipping {sc_month_str} comparison plot - no forecasters have data for this month")
-            continue
-        fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
-            monthly_trajs,
+        fig_median_vs_central = plot_median_vs_central_comparison(
+            median_trajectory_data,
+            monthly_central_trajectories_by_forecaster,
             config,
+            forecaster_name="Eli",
+            superexp_forecaster_name=superexp_forecaster,
+            exp_forecaster_name=exp_forecaster,
+            mixed_forecaster_name=mixed_forecaster,
+            superexp_sc_month=superexp_month,
+            exp_sc_month=exp_month,
+            mixed_sc_month=mixed_month,
             overlay_external_data=True,
-            title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
-            sc_month_str=sc_month_str,
+            title=plot_title,
         )
-        fig_cent_forecaster_comparison_month.savefig(
-            central_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+        fig_median_vs_central.savefig(
+            central_dir / f"median_vs_central_comparison_{base_name}.png",
             dpi=300,
             bbox_inches="tight",
         )
-        plt.close(fig_cent_forecaster_comparison_month)
+        plt.close(fig_median_vs_central)
+        print("Saved median vs central comparison plot to central_trajectories folder")
 
-    # # Commented out: Compare unconditional central trajectories across forecasters
-    # unconditional_central_trajs = [
-    #     (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name]["Unconditional"])
-    #     for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
-    #     if "Unconditional" in monthly_central_trajectories_by_forecaster[forecaster_name]
-    # ]
-    # if unconditional_central_trajs:
-    #     fig_unconditional_comparison = plot_central_trajectories_comparison(
-    #         unconditional_central_trajs,
-    #         config,
-    #         overlay_external_data=True,
-    #         title="Time Horizon Extension Central Trajectories – Unconditional",
-    #     )
-    #     fig_unconditional_comparison.savefig(
-    #         central_dir / f"forecaster_comparison_unconditional_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
-    #         dpi=300,
-    #         bbox_inches="tight",
-    #     )
-    #     plt.close(fig_unconditional_comparison)
-
-    # --------------------------------------------------------
-    # Create separate plots for Nov 2026 and Jan 2027 with parameters
-    # --------------------------------------------------------
-    for key_month in ["November 2026", "January 2027"]:
-        key_month_trajs = []
-        for forecaster_name in monthly_central_trajectories_by_forecaster.keys():
-            if key_month in monthly_central_trajectories_by_forecaster[forecaster_name]:
-                traj = monthly_central_trajectories_by_forecaster[forecaster_name][key_month]
-                key_month_trajs.append((forecaster_name, traj))
-        if key_month_trajs:
-            month_slug = key_month.lower().replace(" ", "_")
-            fig_key_month = plot_central_trajectories_comparison(
-                key_month_trajs,
-                config,
-                overlay_external_data=True,
-                title=f"Central Trajectories – {key_month} (with parameters)",
-                sc_month_str=key_month,
-                show_params_in_legend=True,
-            )
-            fig_key_month.savefig(
-                central_dir / f"forecaster_comparison_{month_slug}_with_params.png",
-                dpi=300,
-                bbox_inches="tight",
-            )
-            plt.close(fig_key_month)
-
-    # --------------------------------------------------------
-    # Get median parameter trajectories for pure growth type forecasters
-    # (trajectories already computed by run_median_trajectory earlier)
-    # --------------------------------------------------------
-    median_param_trajectories = {}  # forecaster_name -> (trajectory, growth_type)
-    for forecaster_name in all_forecaster_samples.keys():
-        samples = all_forecaster_samples[forecaster_name]
-        growth_type = get_forecaster_growth_type(samples)
-        if growth_type is not None and forecaster_name in median_trajectory_data:
-            traj_data = median_trajectory_data[forecaster_name]
-            if growth_type in traj_data:
-                print(f"Using pre-computed median trajectory for {forecaster_name} ({growth_type})")
-                median_param_trajectories[forecaster_name] = (traj_data[growth_type], growth_type)
-
-    # Create versions of central trajectory comparison plots with median param trajectories
-    if median_param_trajectories:
-        # Build list of median trajectories for plotting
-        median_trajs_list = [
-            (forecaster_name, traj, growth_type)
-            for forecaster_name, (traj, growth_type) in median_param_trajectories.items()
-        ]
-
-        # Monthly comparisons with median trajectories
         for sc_month_str in target_months:
             # Build list of trajectories for forecasters that have data for this month
-            monthly_trajs_median = [
+            monthly_trajs = [
                 (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
                 for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
                 if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
             ]
-            if not monthly_trajs_median:
+            if not monthly_trajs:
+                print(f"Skipping {sc_month_str} comparison plot - no forecasters have data for this month")
                 continue
-            fig_with_median = plot_central_trajectories_comparison(
-                monthly_trajs_median,
+            fig_cent_forecaster_comparison_month = plot_central_trajectories_comparison(
+                monthly_trajs,
                 config,
                 overlay_external_data=True,
-                title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals (with Median Params)",
-                median_trajectories=median_trajs_list,
+                title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals",
                 sc_month_str=sc_month_str,
             )
-            fig_with_median.savefig(
-                central_dir / f"forecaster_comparison_{sc_month_str}_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+            fig_cent_forecaster_comparison_month.savefig(
+                central_dir / f"forecaster_comparison_{sc_month_str}_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
                 dpi=300,
                 bbox_inches="tight",
             )
-            plt.close(fig_with_median)
+            plt.close(fig_cent_forecaster_comparison_month)
 
-        # # Commented out: Unconditional comparison with median trajectories
+        # # Commented out: Compare unconditional central trajectories across forecasters
+        # unconditional_central_trajs = [
+        #     (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name]["Unconditional"])
+        #     for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+        #     if "Unconditional" in monthly_central_trajectories_by_forecaster[forecaster_name]
+        # ]
         # if unconditional_central_trajs:
-        #     fig_unconditional_with_median = plot_central_trajectories_comparison(
+        #     fig_unconditional_comparison = plot_central_trajectories_comparison(
         #         unconditional_central_trajs,
         #         config,
         #         overlay_external_data=True,
-        #         title="Time Horizon Extension Central Trajectories – Unconditional (with Median Params)",
-        #         median_trajectories=median_trajs_list,
+        #         title="Time Horizon Extension Central Trajectories – Unconditional",
         #     )
-        #     fig_unconditional_with_median.savefig(
-        #         central_dir / f"forecaster_comparison_unconditional_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+        #     fig_unconditional_comparison.savefig(
+        #         central_dir / f"forecaster_comparison_unconditional_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
         #         dpi=300,
         #         bbox_inches="tight",
         #     )
-        #     plt.close(fig_unconditional_with_median)
+        #     plt.close(fig_unconditional_comparison)
+
+        # --------------------------------------------------------
+        # Create separate plots for Nov 2026 and Jan 2027 with parameters
+        # --------------------------------------------------------
+        for key_month in ["November 2026", "January 2027"]:
+            key_month_trajs = []
+            for forecaster_name in monthly_central_trajectories_by_forecaster.keys():
+                if key_month in monthly_central_trajectories_by_forecaster[forecaster_name]:
+                    traj = monthly_central_trajectories_by_forecaster[forecaster_name][key_month]
+                    key_month_trajs.append((forecaster_name, traj))
+            if key_month_trajs:
+                month_slug = key_month.lower().replace(" ", "_")
+                fig_key_month = plot_central_trajectories_comparison(
+                    key_month_trajs,
+                    config,
+                    overlay_external_data=True,
+                    title=f"Central Trajectories – {key_month} (with parameters)",
+                    sc_month_str=key_month,
+                    show_params_in_legend=True,
+                )
+                fig_key_month.savefig(
+                    central_dir / f"forecaster_comparison_{month_slug}_with_params.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.close(fig_key_month)
+
+        # --------------------------------------------------------
+        # Get median parameter trajectories for pure growth type forecasters
+        # (trajectories already computed by run_median_trajectory earlier)
+        # --------------------------------------------------------
+        median_param_trajectories = {}  # forecaster_name -> (trajectory, growth_type)
+        for forecaster_name in all_forecaster_samples.keys():
+            samples = all_forecaster_samples[forecaster_name]
+            growth_type = get_forecaster_growth_type(samples)
+            if growth_type is not None and forecaster_name in median_trajectory_data:
+                traj_data = median_trajectory_data[forecaster_name]
+                if growth_type in traj_data:
+                    print(f"Using pre-computed median trajectory for {forecaster_name} ({growth_type})")
+                    median_param_trajectories[forecaster_name] = (traj_data[growth_type], growth_type)
+
+        # Create versions of central trajectory comparison plots with median param trajectories
+        if median_param_trajectories:
+            # Build list of median trajectories for plotting
+            median_trajs_list = [
+                (forecaster_name, traj, growth_type)
+                for forecaster_name, (traj, growth_type) in median_param_trajectories.items()
+            ]
+
+            # Monthly comparisons with median trajectories
+            for sc_month_str in target_months:
+                # Build list of trajectories for forecasters that have data for this month
+                monthly_trajs_median = [
+                    (forecaster_name, monthly_central_trajectories_by_forecaster[forecaster_name][sc_month_str])
+                    for forecaster_name in monthly_central_trajectories_by_forecaster.keys()
+                    if sc_month_str in monthly_central_trajectories_by_forecaster[forecaster_name]
+                ]
+                if not monthly_trajs_median:
+                    continue
+                fig_with_median = plot_central_trajectories_comparison(
+                    monthly_trajs_median,
+                    config,
+                    overlay_external_data=True,
+                    title=f"Time Horizon Extension Central Trajectories – {sc_month_str} SC Arrivals (with Median Params)",
+                    median_trajectories=median_trajs_list,
+                    sc_month_str=sc_month_str,
+                )
+                fig_with_median.savefig(
+                    central_dir / f"forecaster_comparison_{sc_month_str}_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.close(fig_with_median)
+
+            # # Commented out: Unconditional comparison with median trajectories
+            # if unconditional_central_trajs:
+            #     fig_unconditional_with_median = plot_central_trajectories_comparison(
+            #         unconditional_central_trajs,
+            #         config,
+            #         overlay_external_data=True,
+            #         title="Time Horizon Extension Central Trajectories – Unconditional (with Median Params)",
+            #         median_trajectories=median_trajs_list,
+            #     )
+            #     fig_unconditional_with_median.savefig(
+            #         central_dir / f"forecaster_comparison_unconditional_with_median_{str(monthly_central_trajectories_by_forecaster.keys())}.png",
+            #         dpi=300,
+            #         bbox_inches="tight",
+            #     )
+            #     plt.close(fig_unconditional_with_median)
 
     return fig, all_forecaster_results, monthly_central_trajectories_by_forecaster, median_trajectory_data
 
@@ -1499,6 +1910,17 @@ def regenerate_plots(output_dir: str | Path):
                 bbox_inches="tight",
             )
 
+            # Save central trajectory data as CSV
+            if central_path is not None:
+                central_df = pd.DataFrame({
+                    'calendar_time': central_path['times'],
+                    'time_horizon_minutes': central_path['horizons'],
+                })
+                central_df.to_csv(
+                    combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
+                    index=False,
+                )
+
             plt.close(fig_trajectories)
             plt.close(fig_combined_month)
             plt.close(fig_combined_month_median)
@@ -1662,7 +2084,7 @@ def regenerate_plots(output_dir: str | Path):
         forecaster_name = forecaster_config["name"]
         if forecaster_name not in all_forecaster_samples:
             continue
-        _, traj_data = run_median_trajectory(config, forecaster_config, forecaster_name)
+        _, traj_data, _ = run_median_trajectory(config, forecaster_config, forecaster_name)
         median_trajectory_data[forecaster_name] = traj_data
 
     median_param_trajectories = {}  # forecaster_name -> (trajectory, growth_type)
@@ -1740,7 +2162,15 @@ if __name__ == "__main__":
     else:
         # Run with closed-form solution (faster)
         print("=== Running with closed-form solution ===")
-        config_path = sys.argv[1] if len(sys.argv) > 1 else "simple_params.yaml"
-        run_simple_sc_simulation(config_path)
+
+        # Parse arguments
+        args = sys.argv[1:]
+        minimal = "--minimal" in args
+        if minimal:
+            args.remove("--minimal")
+            print("Running in MINIMAL mode: only PDF/CDF + March 2027 illustrative plots")
+
+        config_path = args[0] if args else "simple_params.yaml"
+        run_simple_sc_simulation(config_path, minimal=minimal)
 
     print(f"\nCompleted at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 

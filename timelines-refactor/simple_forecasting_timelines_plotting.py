@@ -371,7 +371,7 @@ def plot_trajectories_sc_month(
     # Title & axes labels
     ax.set_title(f"Time Horizon Extension Trajectories for Runs Reaching SC in {sc_month_str}",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
     ax.set_yscale('log')
@@ -407,24 +407,16 @@ def plot_trajectories_sc_month(
         ax.set_ylim(y_min, y_max)
 
     all_ticks = [
-        (0.1, "6s"),
+        (5/60, "5s"),
         (0.5, "30s"),
-        (1, "1 min"),
-        (5, "5 min"),
-        (15, "15 min"),
-        (30, "30 min"),
+        (3, "3 mins"),
+        (15, "15 mins"),
         (60, "1 hour"),
-        (240, "4 hours"),
         (480, "1 work day"),
         (2400, "1 work week"),
         (10020, "1 work month"),
-        (60120, "6 work months"),
         (120240, "1 work year"),
-        (240480, "2 work years"),
         (601200, "5 work years"),
-        (1202400, "10 work years"),
-        (2404800, "20 work years"),
-        (4809600, "40 work years"),
     ]
 
     valid_ticks = [(pos, label) for pos, label in all_ticks if y_min <= pos <= y_max]
@@ -595,7 +587,7 @@ def plot_combined_trajectories_sc_month(
         plot_title = "Comparing Model Trajectories to Graph Curves"
     plot_subtitle = f"(Filtered for {sc_month_str} SC Arrivals)"
     ax.set_title(f"{plot_title}\n{plot_subtitle}", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
     ax.set_yscale('log')
@@ -612,23 +604,23 @@ def plot_combined_trajectories_sc_month(
     min_time_minutes = 0.1 / 60
     if y_min < min_time_minutes:
         y_min = min_time_minutes
-        ax.set_ylim(y_min, y_max)
+    # Ensure y_max extends to at least 50 work years (6012000 minutes)
+    if y_max < 6012000:
+        y_max = 6012000
+    ax.set_ylim(y_min, y_max)
 
     all_ticks = [
-        (0.01, "0.6s"),
-        (0.1, "6s"),
+        (5/60, "5s"),
         (0.5, "30s"),
-        (1, "1 min"),
-        (5, "5 min"),
-        (15, "15 min"),
-        (30, "30 min"),
+        (3, "3 mins"),
+        (15, "15 mins"),
         (60, "1 hour"),
-        (240, "4 hours"),
         (480, "1 work day"),
         (2400, "1 work week"),
         (10020, "1 work month"),
-        (60120, "1 work year"),
-        (240480, "4 work years"),
+        (120240, "1 work year"),
+        (601200, "5 work years"),
+        (6012000, "50 work years"),
     ]
 
     valid_ticks = [(pos, label) for pos, label in all_ticks if y_min <= pos <= y_max]
@@ -930,7 +922,7 @@ def plot_backcasted_trajectories(all_forecaster_backcast_trajectories: dict, all
     # Configure plot
     ax.set_title("Backcasted Time Horizon Trajectories\n(Historical development leading to current capabilities)",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     
     # Set axis properties
     ax.set_xlim(x_min, x_max)
@@ -1201,7 +1193,7 @@ def plot_combined_trajectories(
     # Configure plot
     ax.set_title("Complete Time Horizon Extension Trajectories\n(Historical development and future projections)",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     
     # Set axis properties
     ax.set_xlim(x_min, x_max)
@@ -1241,22 +1233,16 @@ def plot_combined_trajectories(
     
     # Generate tick positions that make sense for time horizons
     all_ticks = [
-        # Short times
-        (0.01, "0.6s"),
-        (0.1, "6s"),
+        (5/60, "5s"),
         (0.5, "30s"),
-        (1, "1 min"),
-        (5, "5 min"),
-        (15, "15 min"),
-        (30, "30 min"),
+        (3, "3 mins"),
+        (15, "15 mins"),
         (60, "1 hour"),
-        (240, "4 hours"),
-        # Work-based time units
-        (480, "1 work day"),      # 8 hours
-        (2400, "1 work week"),    # 40 hours  
-        (10020, "1 work month"),  # 167 hours
-        (60120, "1 year"),        # 1 year of work
-        (240480, "4 work years"),
+        (480, "1 work day"),
+        (2400, "1 work week"),
+        (10020, "1 work month"),
+        (120240, "1 work year"),
+        (601200, "5 work years"),
     ]
     
     # Filter ticks to be within range
@@ -1507,7 +1493,7 @@ def plot_central_trajectories_comparison(
     # Axes formatting (titles, labels, log-scale, ticks)
     # ------------------------------------------------------------------
     ax.set_title(title, fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
     ax.set_yscale('log')
@@ -1521,20 +1507,16 @@ def plot_central_trajectories_comparison(
         ax.set_ylim(y_min, y_max)
 
     all_ticks = [
-        (0.01, "0.6s"),
-        (0.1, "6s"),
+        (5/60, "5s"),
         (0.5, "30s"),
-        (1, "1 min"),
-        (5, "5 min"),
-        (15, "15 min"),
-        (30, "30 min"),
+        (3, "3 mins"),
+        (15, "15 mins"),
         (60, "1 hour"),
-        (240, "4 hours"),
         (480, "1 work day"),
         (2400, "1 work week"),
         (10020, "1 work month"),
-        (60120, "1 year"),
-        (240480, "4 work years"),
+        (120240, "1 work year"),
+        (601200, "5 work years"),
     ]
     valid_ticks = [(pos, lab) for pos, lab in all_ticks if y_min <= pos <= y_max]
     if valid_ticks:
@@ -1760,7 +1742,7 @@ def plot_median_vs_central_comparison(
     if title is None:
         title = f"Trajectory with Median Parameters vs Central Trajectories ({forecaster_name}'s distributions)"
     ax.set_title(title, fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
     ax.set_yscale('log')
@@ -1774,20 +1756,16 @@ def plot_median_vs_central_comparison(
         ax.set_ylim(y_min, y_max)
 
     all_ticks = [
-        (0.01, "0.6s"),
-        (0.1, "6s"),
+        (5/60, "5s"),
         (0.5, "30s"),
-        (1, "1 min"),
-        (5, "5 min"),
-        (15, "15 min"),
-        (30, "30 min"),
+        (3, "3 mins"),
+        (15, "15 mins"),
         (60, "1 hour"),
-        (240, "4 hours"),
         (480, "1 work day"),
         (2400, "1 work week"),
         (10020, "1 work month"),
-        (60120, "1 year"),
-        (240480, "4 work years"),
+        (120240, "1 work year"),
+        (601200, "5 work years"),
     ]
     valid_ticks = [(pos, lab) for pos, lab in all_ticks if y_min <= pos <= y_max]
     if valid_ticks:
@@ -1898,7 +1876,7 @@ def plot_median_trajectories_simple(
     growth_label = growth_type.capitalize()
     ax.set_title(f"Median Parameter Trajectories ({growth_label} Growth)",
                  fontsize=config["plotting_style"]["font"]["sizes"]["title"])
-    ax.set_ylabel("Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
 
     ax.set_xlim(x_min, x_max)
     ax.set_yscale('log')
@@ -1912,20 +1890,16 @@ def plot_median_trajectories_simple(
         ax.set_ylim(y_min, y_max)
 
     all_ticks = [
-        (0.01, "0.6s"),
-        (0.1, "6s"),
+        (5/60, "5s"),
         (0.5, "30s"),
-        (1, "1 min"),
-        (5, "5 min"),
-        (15, "15 min"),
-        (30, "30 min"),
+        (3, "3 mins"),
+        (15, "15 mins"),
         (60, "1 hour"),
-        (240, "4 hours"),
         (480, "1 work day"),
         (2400, "1 work week"),
         (10020, "1 work month"),
-        (60120, "1 year"),
-        (240480, "4 work years"),
+        (120240, "1 work year"),
+        (601200, "5 work years"),
     ]
     valid_ticks = [(pos, lab) for pos, lab in all_ticks if y_min <= pos <= y_max]
     if valid_ticks:

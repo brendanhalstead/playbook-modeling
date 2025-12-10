@@ -327,13 +327,14 @@ def plot_comparison(generated: pd.DataFrame, config: dict) -> None:
 
     # Labels
     ax.set_xlabel('Year', fontsize=12)
-    ax.set_ylabel('Horizon (minutes)', fontsize=12)
+    ax.set_ylabel('Horizon (work time)', fontsize=12)
     csv_name = Path(config['comparison_csv']).stem
     ax.set_title(f'Illustrative SE Trend: {csv_name}', fontsize=14)
 
-    # Custom y-axis ticks with human-readable labels
-    y_ticks = [1/60, 1, 60, 1440, 10080, 43200, 525600, 5256000]
-    y_labels = ['1s', '1m', '1h', '1d', '1w', '1mo', '1y', '10y']
+    # Custom y-axis ticks with work time labels
+    # Work time: 1 work year = 2000 hours, 1 work month = 167 hours, 1 work week = 40 hours, 1 work day = 8 hours
+    y_ticks = [1/60, 1, 8*60, 40*60, 167*60, 2000*60, 20000*60]
+    y_labels = ['1s', '1m', '1 work day', '1 work week', '1 work month', '1 work year', '10 work years']
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels)
 
