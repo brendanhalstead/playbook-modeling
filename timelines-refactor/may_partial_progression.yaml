@@ -62,19 +62,25 @@ forecasters:
       h_SC_ci: [1200, 1200.0001] # Months needed for SC
       cost_speed_ci: [13, 13.001] # Coding efficiency in months 
       SC_prog_multiplier_ci: [18.5, 18.501]  # Progress multiplier at SC - 1    
-  patched_rd_speedup:
-    name: "patched_rd_speedup"
+  patched_rd_speedup_only:
+    name: "patched_rd_speedup_only"
     parent: "param_estimate_changes"
     color: "#003000"
     patch_rd_speedup: True 
-  no_automation_pre_input_time_series:
-    name: "no_automation_pre_input_time_series"
-    parent: "patched_rd_speedup"
+  new_model_interpolation:
+    name: "new_model_interpolation"
+    parent: "param_estimate_changes"
+    use_new_model_interpolation: True
+    patch_rd_speedup: True
     color: "#003000"
-    automation_off: True
+  # no_automation_pre_input_time_series:
+  #   name: "no_automation_pre_input_time_series"
+  #   parent: "patched_rd_speedup"
+  #   color: "#003000"
+  #   automation_off: True
   no_internal_external_gap:
     name: "no_internal_external_gap"
-    parent: "patched_rd_speedup"
+    parent: "new_model_interpolation"
     color: "#003000"
     distributions:
       announcement_delay_ci: [0.0001, 0.00011]  # Announcement delay in months (1 week to 6 months)

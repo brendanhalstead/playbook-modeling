@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import lognorm, gaussian_kde, norm, rankdata
 import yaml
+import json
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
@@ -1005,7 +1006,74 @@ def calculate_hcp_distributions(
     return hcp_data
 
 
-def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: bool = False) -> tuple[plt.Figure, dict, dict, dict]:
+def save_trajectories_jsonl(
+    all_forecaster_trajectories: dict,
+    all_forecaster_backcast_trajectories: dict,
+    all_forecaster_samples: dict,
+    all_forecaster_results: dict,
+    output_dir: Path
+) -> None:
+    """Save all time->horizon trajectories to JSONL files for post-run analysis.
+
+    Each line in the JSONL file contains one simulation's trajectory data:
+    - sample_idx: Index of this simulation
+    - sc_arrival_year: SC arrival year for this simulation
+    - growth_type: 'exponential', 'superexponential', or 'subexponential'
+    - parameters: Dict of sample parameters for this simulation
+    - forward_trajectory: List of [time, horizon_minutes] points
+    - backcast_trajectory: List of [time, horizon_minutes] points
+    """
+    trajectories_dir = output_dir / "trajectories_jsonl"
+    trajectories_dir.mkdir(exist_ok=True)
+
+    for forecaster_name in all_forecaster_trajectories.keys():
+        forward_trajectories = all_forecaster_trajectories[forecaster_name]
+        backcast_trajectories = all_forecaster_backcast_trajectories[forecaster_name]
+        samples = all_forecaster_samples[forecaster_name]
+        results = all_forecaster_results[forecaster_name]
+
+        jsonl_path = trajectories_dir / f"{forecaster_name}_trajectories.jsonl"
+
+        with open(jsonl_path, 'w') as f:
+            for i in range(len(forward_trajectories)):
+                # Determine growth type
+                if samples["is_exponential"][i]:
+                    growth_type = "exponential"
+                elif samples["is_superexponential"][i]:
+                    growth_type = "superexponential"
+                else:
+                    growth_type = "subexponential"
+
+                # Build parameters dict (convert numpy types to Python types)
+                params = {
+                    "h_SC": float(samples["h_SC"][i]),
+                    "T_t": float(samples["T_t"][i]),
+                    "cost_speed": float(samples["cost_speed"][i]),
+                    "announcement_delay": float(samples["announcement_delay"][i]),
+                    "present_prog_multiplier": float(samples["present_prog_multiplier"][i]),
+                    "SC_prog_multiplier": float(samples["SC_prog_multiplier"][i]),
+                    "patch_rd_speedup": bool(samples["patch_rd_speedup"][i]),
+                    "software_progress_share": float(samples["software_progress_share"][i]),
+                }
+
+                # Build the record
+                record = {
+                    "sample_idx": i,
+                    "sc_arrival_year": float(results[i]),
+                    "growth_type": growth_type,
+                    "parameters": params,
+                    "forward_trajectory": [[float(t), float(h)] for t, h in forward_trajectories[i]],
+                    "backcast_trajectory": [[float(t), float(h)] for t, h in backcast_trajectories[i]],
+                }
+
+                f.write(json.dumps(record) + '\n')
+
+        print(f"Saved {len(forward_trajectories)} trajectories to {jsonl_path}")
+
+    print(f"\nAll trajectory JSONL files saved to {trajectories_dir}")
+
+
+def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: bool = False, n_sims: int | None = None) -> tuple[plt.Figure, dict, dict, dict]:
     """Run simplified SC simulation and plot results.
 
     Parameters
@@ -1015,6 +1083,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
     minimal : bool
         If True, only generate: overall PDF/CDF plots and March 2027 illustrative
         combined trajectories (PNG + CSV) for each forecaster
+    n_sims : int | None
+        Override the number of Monte Carlo simulations from config
 
     Returns
     -------
@@ -1023,6 +1093,11 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
     """
     print("Loading configuration...")
     config = load_config(config_path)
+
+    # Override n_sims if provided via command line
+    if n_sims is not None:
+        config["simulation"]["n_sims"] = n_sims
+        print(f"Overriding n_sims to {n_sims}")
 
     # Apply parent-child inheritance (with topological sort)
     config["forecasters"] = apply_inheritance_to_forecasters(config["forecasters"])
@@ -1189,6 +1264,15 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
     with open(output_dir / "config.yaml", "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
+    # Save all trajectories to JSONL for post-run analysis
+    print("\nSaving trajectories to JSONL...")
+    save_trajectories_jsonl(
+        all_forecaster_trajectories,
+        all_forecaster_backcast_trajectories,
+        all_forecaster_samples,
+        all_forecaster_results,
+        output_dir
+    )
 
     print("\nGenerating plots...")
     # Create and save original plot (PDF)
@@ -1200,6 +1284,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
     fig_cdf = plot_results_cdf(all_forecaster_results, config)
     fig_cdf.savefig(output_dir / "simple_combined_headline_cdf.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cdf)
+
+    # Save PDF and CDF data to CSVs
+    save_pdf_cdf_csvs(all_forecaster_results, config, output_dir)
 
     # Calculate and save HCP distributions
     print("\nCalculating HCP distributions...")
@@ -1298,11 +1385,14 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
                 "June 2027",
                 "August 2027",
                 "May 2028",
+                "June 2028",
                 "July 2028",
                 "September 2028",
                 "April 2029",
                 "November 2029",
                 "January 2030",
+                "June 2030",
+                "July 2030",
                 # "March 2028",
                 # "March 2029",
                 # "March 2030",
@@ -1431,6 +1521,35 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
 
             plt.close(fig_cent_compare)
         print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
+
+    # Save summary CSV with all central trajectory parameters
+    central_params_rows = []
+    for forecaster_name, trajs_by_month in monthly_central_trajectories_by_forecaster.items():
+        for sc_month_str, central_path in trajs_by_month.items():
+            if central_path is not None:
+                row = {
+                    'forecaster': forecaster_name,
+                    'sc_month': sc_month_str,
+                    'sample_idx': central_path.get('sample_idx'),
+                    'h_SC_work_months': central_path.get('h_SC'),
+                    'T_t_doubling_time_months': central_path.get('T_t'),
+                    'cost_speed_months': central_path.get('cost_speed'),
+                    'announcement_delay_months': central_path.get('announcement_delay'),
+                    'present_prog_multiplier': central_path.get('present_prog_multiplier'),
+                    'SC_prog_multiplier': central_path.get('SC_prog_multiplier'),
+                    'is_exponential': central_path.get('is_exponential'),
+                    'is_superexponential': central_path.get('is_superexponential'),
+                    'is_subexponential': central_path.get('is_subexponential'),
+                    'patch_rd_speedup': central_path.get('patch_rd_speedup'),
+                    'software_progress_share': central_path.get('software_progress_share'),
+                    'se_doubling_decay_fraction': central_path.get('se_doubling_decay_fraction'),
+                    'sub_doubling_growth_fraction': central_path.get('sub_doubling_growth_fraction'),
+                }
+                central_params_rows.append(row)
+    if central_params_rows:
+        central_params_df = pd.DataFrame(central_params_rows)
+        central_params_df.to_csv(combined_dir / "central_trajectory_parameters.csv", index=False)
+        print(f"Saved central trajectory parameters to {combined_dir / 'central_trajectory_parameters.csv'}")
 
     if not minimal:
         # --------------------------------------------------------
@@ -1730,6 +1849,9 @@ def regenerate_plots(output_dir: str | Path):
     fig_cdf.savefig(output_dir / "simple_combined_headline_cdf.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cdf)
 
+    # Save PDF and CDF data to CSVs
+    save_pdf_cdf_csvs(all_forecaster_results, config, output_dir)
+
     monthly_central_trajectories_by_forecaster = {}
     for forecaster_name in all_forecaster_results.keys():
         # --- Figures that are independent of a specific SC month ---
@@ -1813,11 +1935,14 @@ def regenerate_plots(output_dir: str | Path):
             "June 2027",
             "August 2027",
             "May 2028",
+            "June 2028",
             "July 2028",
             "September 2028",
             "April 2029",
             "November 2029",
             "January 2030",
+            "June 2030",
+            "July 2030",
             # "March 2028",
             # "March 2029",
             # "March 2030",
@@ -1944,6 +2069,35 @@ def regenerate_plots(output_dir: str | Path):
 
             plt.close(fig_cent_compare)
         print(f"\nSaved all trajectory plots (including month-specific versions) for {forecaster_name}.")
+
+    # Save summary CSV with all central trajectory parameters
+    central_params_rows = []
+    for forecaster_name, trajs_by_month in monthly_central_trajectories_by_forecaster.items():
+        for sc_month_str, central_path in trajs_by_month.items():
+            if central_path is not None:
+                row = {
+                    'forecaster': forecaster_name,
+                    'sc_month': sc_month_str,
+                    'sample_idx': central_path.get('sample_idx'),
+                    'h_SC_work_months': central_path.get('h_SC'),
+                    'T_t_doubling_time_months': central_path.get('T_t'),
+                    'cost_speed_months': central_path.get('cost_speed'),
+                    'announcement_delay_months': central_path.get('announcement_delay'),
+                    'present_prog_multiplier': central_path.get('present_prog_multiplier'),
+                    'SC_prog_multiplier': central_path.get('SC_prog_multiplier'),
+                    'is_exponential': central_path.get('is_exponential'),
+                    'is_superexponential': central_path.get('is_superexponential'),
+                    'is_subexponential': central_path.get('is_subexponential'),
+                    'patch_rd_speedup': central_path.get('patch_rd_speedup'),
+                    'software_progress_share': central_path.get('software_progress_share'),
+                    'se_doubling_decay_fraction': central_path.get('se_doubling_decay_fraction'),
+                    'sub_doubling_growth_fraction': central_path.get('sub_doubling_growth_fraction'),
+                }
+                central_params_rows.append(row)
+    if central_params_rows:
+        central_params_df = pd.DataFrame(central_params_rows)
+        central_params_df.to_csv(combined_dir / "central_trajectory_parameters.csv", index=False)
+        print(f"Saved central trajectory parameters to {combined_dir / 'central_trajectory_parameters.csv'}")
 
     # --------------------------------------------------------
     # Plot median params vs central trajectories comparison
@@ -2170,7 +2324,15 @@ if __name__ == "__main__":
             args.remove("--minimal")
             print("Running in MINIMAL mode: only PDF/CDF + March 2027 illustrative plots")
 
+        # Parse --n_sims argument
+        n_sims = None
+        if "--n_sims" in args:
+            idx = args.index("--n_sims")
+            n_sims = int(args[idx + 1])
+            args.pop(idx)  # Remove --n_sims
+            args.pop(idx)  # Remove the value
+
         config_path = args[0] if args else "simple_params.yaml"
-        run_simple_sc_simulation(config_path, minimal=minimal)
+        run_simple_sc_simulation(config_path, minimal=minimal, n_sims=n_sims)
 
     print(f"\nCompleted at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 

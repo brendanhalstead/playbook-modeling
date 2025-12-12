@@ -15,6 +15,73 @@ from timelines_common import *
 set_disclaimer_variant("may")
 
 
+# Cache for new model interpolation data
+_new_model_interpolation_cache = None
+
+
+def get_new_model_interpolation_fraction(progress_fraction: float) -> float:
+    """
+    Transform progress_fraction using the New Model (Dec 2025) curve.
+
+    Maps the model's progress_fraction to the normalized multiplier fraction
+    from the New Model curve. For example, if progress_fraction=0.5 (50% of way to SC),
+    this looks up what fraction of the normalized multiplier the New Model has at 50% progress
+    (approximately 0.15 or 15%), and returns that value to use for interpolation.
+
+    Uses formula: fraction = (log(cur)/log(start)) / (log(end)/log(start))
+    """
+    global _new_model_interpolation_cache
+
+    if _new_model_interpolation_cache is None:
+        # Load external CSV and build interpolation
+        external_csv_path = Path(__file__).parent.parent / "external" / "inputs" / "ai_progress_results_20251211_034612.csv"
+
+        if not external_csv_path.exists():
+            # Fall back to linear interpolation if file doesn't exist
+            return progress_fraction
+
+        ext_df = pd.read_csv(external_csv_path, comment='#')
+
+        # Find cumulative_progress at 2025.6 (start reference)
+        ref_start_time = 2025.6
+        closest_start_idx = (ext_df['time'] - ref_start_time).abs().idxmin()
+        cumulative_progress_at_start = ext_df.loc[closest_start_idx, 'cumulative_progress']
+        ext_start_mult = ext_df.loc[closest_start_idx, 'ai_software_progress_multiplier']
+
+        # Find cumulative_progress at SC (use 2031.1 as the end point)
+        ref_sc_time = 2031.1
+        closest_sc_idx = (ext_df['time'] - ref_sc_time).abs().idxmin()
+        cumulative_progress_at_sc = ext_df.loc[closest_sc_idx, 'cumulative_progress']
+        ext_sc_mult = ext_df.loc[closest_sc_idx, 'ai_software_progress_multiplier']
+
+        # Filter to time range from 2025.6 onwards
+        ext_df = ext_df[ext_df['time'] >= ref_start_time].copy()
+
+        # Calculate % of way to SC (progress_pct from 0 to 1)
+        progress_range = cumulative_progress_at_sc - cumulative_progress_at_start
+        ext_df['progress_fraction'] = (ext_df['cumulative_progress'] - cumulative_progress_at_start) / progress_range
+
+        # Filter to 0-1 range
+        ext_df = ext_df[(ext_df['progress_fraction'] >= 0) & (ext_df['progress_fraction'] <= 1)]
+
+        # Calculate normalized multiplier using log scale normalization on (mult - 1):
+        # fraction = log((cur-1)/(start-1)) / log((end-1)/(start-1))
+        ext_df['mult_normalized'] = np.log((ext_df['ai_software_progress_multiplier'] - 1) / (ext_start_mult - 1)) / np.log((ext_sc_mult - 1) / (ext_start_mult - 1))
+
+        # Build interpolation arrays
+        _new_model_interpolation_cache = {
+            'progress_fractions': ext_df['progress_fraction'].values,
+            'mult_normalized': ext_df['mult_normalized'].values
+        }
+
+    # Interpolate to find the normalized multiplier at the given progress_fraction
+    return np.interp(
+        progress_fraction,
+        _new_model_interpolation_cache['progress_fractions'],
+        _new_model_interpolation_cache['mult_normalized']
+    )
+
+
 def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
     """Generate samples from all input distributions."""
     samples = {}
@@ -225,6 +292,524 @@ def format_horizon(h: float) -> str:
         return f"{h/10080:.1f} weeks"
     else:
         return f"{h/43200:.1f} months"
+
+
+def run_median_trajectory_with_growth_dynamics(
+    config: dict, forecaster_config: dict, forecaster_name: str
+) -> tuple[list, float]:
+    """Run a single median trajectory and track growth dynamics over time.
+
+    Returns:
+        growth_dynamics: List of dicts with keys:
+            - year: calendar year
+            - human_only_research_contribution: research contribution if software_prog_multiplier were 1
+            - software_prog_multiplier: the actual software progress multiplier
+            - research_contribution: actual research contribution
+            - research_stock: cumulative research stock
+            - baseline_growth: the baseline growth rate (stays constant)
+            - actual_growth: the actual growth rate at this timestep
+        baseline_growth_value: The constant baseline growth value
+    """
+    # Get median samples
+    median_samples = get_median_samples(forecaster_config)
+
+    # Get simulation parameters
+    current_horizon = config["simulation"]["current_horizon"]
+    dt = config["simulation"]["dt"]
+    max_time = config["simulation"]["max_time"]
+    start_year = config["simulation"]["start_year"]
+
+    # Calculate base time and horizon mappings
+    base_time_in_months, horizon_mappings = calculate_base_time(median_samples, current_horizon)
+
+    # Get software progress share from samples
+    software_progress_share = median_samples["initial_software_progress_share"]
+
+    # Initialize simulation variables
+    time = start_year - median_samples["announcement_delay"][0] / 12
+    progress = 0.0
+    dt_in_months = dt / 30.5
+
+    # Initialize labor-based research variables
+    labor_pool = config["simulation"]["initial_labor_pool"]
+    research_stock = config["simulation"]["initial_research_stock"]
+    labor_power = config["simulation"]["labor_power"]
+
+    # Track growth dynamics
+    growth_dynamics = []
+    baseline_growth_value = None
+
+    i = 0  # Single simulation index
+
+    while progress < base_time_in_months[i] and time < max_time:
+        # Calculate progress fraction
+        progress_fraction = progress / base_time_in_months[i]
+
+        # Transform progress_fraction if using new model interpolation
+        if forecaster_config.get("use_new_model_interpolation", False):
+            interpolation_fraction = get_new_model_interpolation_fraction(progress_fraction)
+        else:
+            interpolation_fraction = progress_fraction
+
+        # Calculate software speedup
+        if forecaster_config.get("automation_off", False):
+            software_prog_multiplier = 1.0
+        elif forecaster_config.get("patch_rd_speedup", False):
+            software_prog_multiplier = 1 + (median_samples["present_prog_multiplier"][i]) * (
+                (median_samples["SC_prog_multiplier"][i]) / (median_samples["present_prog_multiplier"][i])
+            ) ** interpolation_fraction
+        else:
+            software_prog_multiplier = (1 + median_samples["present_prog_multiplier"][i]) * (
+                (1 + median_samples["SC_prog_multiplier"][i]) / (1 + median_samples["present_prog_multiplier"][i])
+            ) ** interpolation_fraction
+
+        # Get current labor growth rate from schedule
+        current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
+        # Convert annual growth rate to daily rate for the time step
+        daily_growth_rate = (1 + current_labor_growth_rate) ** (dt / 250) - 1
+
+        # Calculate new labor added this period
+        new_labor = labor_pool * daily_growth_rate
+        labor_pool += new_labor
+
+        # Calculate research contribution (actual, with software multiplier) - per timestep
+        research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * software_prog_multiplier) / (250 / dt)
+
+        # Calculate human-only research contribution (as if software_prog_multiplier were 1) - per timestep
+        human_only_research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * 1.0) / (250 / dt)
+
+        # Annualize research contributions (250 working days per year)
+        research_contribution_annualized = research_contribution * (250 / dt)
+        human_only_research_contribution_annualized = human_only_research_contribution * (250 / dt)
+
+        # Add to research stock
+        new_research_stock = research_stock + research_contribution
+
+        # Calculate actual growth rate (per timestep)
+        actual_growth = new_research_stock / research_stock
+
+        # Annualize growth rates (250 working days per year)
+        actual_growth_annualized = actual_growth ** (250 / dt)
+
+        # Set baseline growth on first iteration
+        if progress == 0:
+            baseline_growth_value = actual_growth
+            baseline_growth_annualized = actual_growth_annualized
+
+        # Calculate adjustment factor based on growth rate ratio
+        growth_ratio = np.log(actual_growth) / np.log(baseline_growth_value)
+
+        # Record growth dynamics
+        growth_dynamics.append({
+            "year": time + median_samples["announcement_delay"][0] / 12,
+            "progress_fraction": progress_fraction,
+            "human_only_research_contribution_annualized": human_only_research_contribution_annualized,
+            "software_prog_multiplier": software_prog_multiplier,
+            "research_contribution_annualized": research_contribution_annualized,
+            "research_stock": research_stock,
+            "baseline_growth_annualized": baseline_growth_annualized,
+            "actual_growth_annualized": actual_growth_annualized,
+            "relative_software_progress_rate": growth_ratio,
+        })
+
+        # Get compute rate for current time using compute schedule
+        compute_rate = get_compute_rate(time, forecaster_config["compute_schedule"])
+
+        # Total rate is weighted average of growth_ratio and compute rates
+        total_rate = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * compute_rate
+
+        # Update progress and time
+        progress += dt_in_months * total_rate
+        time += dt_in_months / 12  # Convert months to years
+
+        # Update research stock
+        research_stock = new_research_stock
+
+    return growth_dynamics, baseline_growth_value
+
+
+def plot_growth_dynamics(
+    growth_dynamics: list,
+    baseline_growth_value: float,
+    forecaster_name: str,
+    config: dict,
+    output_path: Path,
+) -> plt.Figure:
+    """Plot growth dynamics quantities over time on a single graph.
+
+    Plots:
+    - human_only_research_contribution
+    - software_prog_multiplier
+    - research_contribution
+    - research_stock
+    - baseline_growth_annualized (constant, dotted line)
+    - actual_growth_annualized
+    - relative_software_progress_rate (growth ratio)
+    """
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Extract data
+    years = [d["year"] for d in growth_dynamics]
+    human_only = [d["human_only_research_contribution_annualized"] for d in growth_dynamics]
+    software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
+    research_contrib = [d["research_contribution_annualized"] for d in growth_dynamics]
+    research_stock = [d["research_stock"] for d in growth_dynamics]
+    baseline_growth = [d["baseline_growth_annualized"] for d in growth_dynamics]
+    actual_growth = [d["actual_growth_annualized"] for d in growth_dynamics]
+    relative_sw_progress = [d["relative_software_progress_rate"] for d in growth_dynamics]
+
+    # Plot each quantity with different colors
+    ax.plot(years, human_only, label="Human-Only Research Contribution (Annualized)", color="#1f77b4", linewidth=2)
+    ax.plot(years, software_mult, label="Software Progress Multiplier", color="#ff7f0e", linewidth=2)
+    ax.plot(years, research_contrib, label="Research Contribution (Annualized)", color="#2ca02c", linewidth=2)
+    ax.plot(years, research_stock, label="Research Stock", color="#d62728", linewidth=2)
+    ax.plot(years, baseline_growth, label="Baseline Growth (Annualized)", color="#9467bd", linewidth=2, linestyle=":")
+    ax.plot(years, actual_growth, label="Actual Growth (Annualized)", color="#8c564b", linewidth=2)
+    ax.plot(years, relative_sw_progress, label="Relative Software Progress Rate", color="#e377c2", linewidth=2)
+
+    # Configure plot
+    ax.set_title(f"Growth Dynamics Over Time - {forecaster_name}",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Value (log scale)", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_yscale("log")
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    fig.tight_layout()
+
+    # Save the figure
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_growth_dynamics_with_external_data(
+    growth_dynamics: list,
+    baseline_growth_value: float,
+    forecaster_name: str,
+    config: dict,
+    output_path: Path,
+    external_csv_path: str = None,
+) -> plt.Figure:
+    """Plot growth dynamics with external data overlay.
+
+    Plots model data:
+    - software_prog_multiplier
+    - research_stock
+    - research_effort (research_contribution_annualized)
+    - relative_software_progress_rate
+
+    Overlays external data (dashed lines):
+    - ai_software_progress_multiplier
+    - research_stock
+    - research_effort
+    - relative_software_progress_rate (computed as software_progress_rate / software_progress_rate_at_2025.6)
+    """
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Extract model data
+    years = [d["year"] for d in growth_dynamics]
+    software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
+    research_stock = [d["research_stock"] for d in growth_dynamics]
+    research_effort = [d["research_contribution_annualized"] for d in growth_dynamics]
+    relative_sw_progress = [d["relative_software_progress_rate"] for d in growth_dynamics]
+
+    # Plot model data (solid lines)
+    ax.plot(years, software_mult, label="Previous Model (Apr 2025): Software Progress Multiplier", color="#ff7f0e", linewidth=2)
+    ax.plot(years, research_stock, label="Previous Model (Apr 2025): Research Stock", color="#d62728", linewidth=2)
+    ax.plot(years, research_effort, label="Previous Model (Apr 2025): Research Effort", color="#2ca02c", linewidth=2)
+    ax.plot(years, relative_sw_progress, label="Previous Model (Apr 2025): Relative Software Progress Rate", color="#e377c2", linewidth=2)
+
+    # Load and plot external data if provided
+    if external_csv_path and Path(external_csv_path).exists():
+        # Read external CSV, skipping comment lines
+        ext_df = pd.read_csv(external_csv_path, comment='#')
+
+        # Filter to relevant time range (around the model's time range)
+        min_year = min(years) - 1
+        max_year = max(years) + 1
+        ext_df = ext_df[(ext_df['time'] >= min_year) & (ext_df['time'] <= max_year)]
+
+        # Calculate relative software progress rate
+        # Find software_progress_rate at 2025.6 (or closest time)
+        ref_time = 2025.6
+        closest_idx = (ext_df['time'] - ref_time).abs().idxmin()
+        software_progress_rate_at_ref = ext_df.loc[closest_idx, 'software_progress_rate']
+
+        ext_df['relative_software_progress_rate'] = ext_df['software_progress_rate'] / software_progress_rate_at_ref
+
+        # Plot external data (dashed lines)
+        ax.plot(ext_df['time'], ext_df['ai_software_progress_multiplier'],
+                label="New Model (Dec 2025): AI Software Progress Multiplier", color="#ff7f0e", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['research_stock'],
+                label="New Model (Dec 2025): Research Stock", color="#d62728", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['research_effort'],
+                label="New Model (Dec 2025): Research Effort", color="#2ca02c", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['relative_software_progress_rate'],
+                label="New Model (Dec 2025): Relative Software Progress Rate", color="#e377c2", linewidth=2, linestyle='--')
+
+    # Configure plot
+    ax.set_title(f"Growth Dynamics Comparison - {forecaster_name}",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Value (log scale)", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_yscale("log")
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"] - 2, framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    fig.tight_layout()
+
+    # Save the figure
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_software_multiplier_vs_progress(
+    growth_dynamics: list,
+    forecaster_name: str,
+    config: dict,
+    output_path: Path,
+    external_csv_path: str = None,
+) -> plt.Figure:
+    """Plot normalized software progress multipliers vs % of way to SC.
+
+    X-axis: % of way to SC (0-100%)
+    Y-axis: % of the way to SC progress multiplier (normalized 0-1, log scale)
+
+    For model data: uses progress_fraction directly, normalizes by SC multiplier value
+    For external data: calculates % as (cumulative_progress - cumulative_progress_at_2025.6) /
+                       (cumulative_progress_at_SC - cumulative_progress_at_2025.6)
+                       normalizes by SC multiplier value
+    """
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(12, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Extract model data
+    progress_pct = [d["progress_fraction"] * 100 for d in growth_dynamics]  # Convert to percentage
+    software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
+
+    # Normalize model data using log scale normalization on (mult - 1):
+    # fraction = log((cur-1)/(start-1)) / log((end-1)/(start-1))
+    model_sc_mult = software_mult[-1]  # SC multiplier is the final value
+    model_start_mult = software_mult[0]  # Starting multiplier
+
+    # Handle edge case where start multiplier is 1 (no AI contribution yet)
+    # Find first multiplier > 1 to use as reference, or fall back to linear normalization
+    if model_start_mult <= 1.0:
+        # Find first multiplier that's meaningfully > 1
+        for i, m in enumerate(software_mult):
+            if m > 1.001:
+                model_start_mult = m
+                break
+
+    if model_start_mult <= 1.0 or model_sc_mult <= model_start_mult:
+        # Fall back to linear normalization if we can't use log formula
+        model_mult_normalized = [(m - 1) / (model_sc_mult - 1) for m in software_mult]
+    else:
+        log_denom = np.log((model_sc_mult - 1) / (model_start_mult - 1))
+        model_mult_normalized = [
+            np.log((m - 1) / (model_start_mult - 1)) / log_denom if m > model_start_mult else 0.0
+            for m in software_mult
+        ]
+
+    # Plot model data (solid line)
+    ax.plot(progress_pct, model_mult_normalized, label=f"Previous Model (Apr 2025) (SC mult: {model_sc_mult:.1f})", color="#ff7f0e", linewidth=2)
+
+    # Load and plot external data if provided
+    if external_csv_path and Path(external_csv_path).exists():
+        # Read external CSV, skipping comment lines
+        ext_df = pd.read_csv(external_csv_path, comment='#')
+
+        # Find cumulative_progress at 2025.6 (start reference)
+        ref_start_time = 2025.6
+        closest_start_idx = (ext_df['time'] - ref_start_time).abs().idxmin()
+        cumulative_progress_at_start = ext_df.loc[closest_start_idx, 'cumulative_progress']
+        ext_start_mult = ext_df.loc[closest_start_idx, 'ai_software_progress_multiplier']
+
+        # Find cumulative_progress at SC (use 2031.1 as the end point)
+        ref_sc_time = 2031.1
+        closest_sc_idx = (ext_df['time'] - ref_sc_time).abs().idxmin()
+        cumulative_progress_at_sc = ext_df.loc[closest_sc_idx, 'cumulative_progress']
+        ext_sc_mult = ext_df.loc[closest_sc_idx, 'ai_software_progress_multiplier']
+
+        # Filter to time range from 2025.6 onwards
+        ext_df = ext_df[ext_df['time'] >= ref_start_time].copy()
+
+        # Calculate % of way to SC
+        progress_range = cumulative_progress_at_sc - cumulative_progress_at_start
+        ext_df['progress_pct'] = (ext_df['cumulative_progress'] - cumulative_progress_at_start) / progress_range * 100
+
+        # Filter to 0-100% range
+        ext_df = ext_df[(ext_df['progress_pct'] >= 0) & (ext_df['progress_pct'] <= 100)]
+
+        # Normalize external data using log scale normalization on (mult - 1):
+        # fraction = log((cur-1)/(start-1)) / log((end-1)/(start-1))
+        ext_df['mult_normalized'] = np.log((ext_df['ai_software_progress_multiplier'] - 1) / (ext_start_mult - 1)) / np.log((ext_sc_mult - 1) / (ext_start_mult - 1))
+
+        # Plot external data (dashed line)
+        ax.plot(ext_df['progress_pct'], ext_df['mult_normalized'],
+                label=f"New Model (Dec 2025) (SC mult: {ext_sc_mult:.1f})", color="#ff7f0e", linewidth=2, linestyle='--')
+
+    # Configure plot
+    ax.set_title(f"Normalized Software Progress Multiplier vs Progress to SC - {forecaster_name}",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("% of Way to SC", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("% of Way to SC Progress Multiplier", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 1.05)  # Linear scale, 0 to slightly above 1
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+
+    fig.tight_layout()
+
+    # Save the figure
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_software_multiplier_vs_progress_absolute(
+    growth_dynamics: list,
+    forecaster_name: str,
+    config: dict,
+    output_path: Path,
+    external_csv_path: str = None,
+) -> plt.Figure:
+    """Plot absolute software progress multipliers vs % of way to SC (log scale y-axis).
+
+    X-axis: % of way to SC (0-100%)
+    Y-axis: Software progress multiplier (absolute value, log scale)
+
+    For model data: uses progress_fraction directly
+    For external data: calculates % as (cumulative_progress - cumulative_progress_at_2025.6) /
+                       (cumulative_progress_at_SC - cumulative_progress_at_2025.6)
+    """
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(12, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Extract model data
+    progress_pct = [d["progress_fraction"] * 100 for d in growth_dynamics]  # Convert to percentage
+    software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
+
+    model_sc_mult = software_mult[-1]  # SC multiplier is the final value
+
+    # Plot model data (solid line)
+    ax.plot(progress_pct, software_mult, label=f"Previous Model (Apr 2025) (SC mult: {model_sc_mult:.1f})", color="#ff7f0e", linewidth=2)
+
+    # Load and plot external data if provided
+    if external_csv_path and Path(external_csv_path).exists():
+        # Read external CSV, skipping comment lines
+        ext_df = pd.read_csv(external_csv_path, comment='#')
+
+        # Find cumulative_progress at 2025.6 (start reference)
+        ref_start_time = 2025.6
+        closest_start_idx = (ext_df['time'] - ref_start_time).abs().idxmin()
+        cumulative_progress_at_start = ext_df.loc[closest_start_idx, 'cumulative_progress']
+
+        # Find cumulative_progress at SC (use 2031.1 as the end point)
+        ref_sc_time = 2031.1
+        closest_sc_idx = (ext_df['time'] - ref_sc_time).abs().idxmin()
+        cumulative_progress_at_sc = ext_df.loc[closest_sc_idx, 'cumulative_progress']
+        ext_sc_mult = ext_df.loc[closest_sc_idx, 'ai_software_progress_multiplier']
+
+        # Filter to time range from 2025.6 onwards
+        ext_df = ext_df[ext_df['time'] >= ref_start_time].copy()
+
+        # Calculate % of way to SC
+        progress_range = cumulative_progress_at_sc - cumulative_progress_at_start
+        ext_df['progress_pct'] = (ext_df['cumulative_progress'] - cumulative_progress_at_start) / progress_range * 100
+
+        # Filter to 0-100% range
+        ext_df = ext_df[(ext_df['progress_pct'] >= 0) & (ext_df['progress_pct'] <= 100)]
+
+        # Plot external data (dashed line)
+        ax.plot(ext_df['progress_pct'], ext_df['ai_software_progress_multiplier'],
+                label=f"New Model (Dec 2025) (SC mult: {ext_sc_mult:.1f})", color="#ff7f0e", linewidth=2, linestyle='--')
+
+    # Configure plot
+    ax.set_title(f"Software Progress Multiplier vs Progress to SC - {forecaster_name}",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("% of Way to SC", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Software Progress Multiplier", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_xlim(0, 100)
+    ax.set_yscale('log')
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+
+    fig.tight_layout()
+
+    # Save the figure
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
 
 
 def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name: str) -> tuple[str, dict]:
@@ -729,14 +1314,20 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             progress_fraction = progress / base_time_in_months[i]
             current_horizon_minutes = get_horizon_at_progress(horizon_mappings[i], progress)
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
-            
+
+            # Transform progress_fraction if using new model interpolation
+            if forecaster_config.get("use_new_model_interpolation", False):
+                interpolation_fraction = get_new_model_interpolation_fraction(progress_fraction)
+            else:
+                interpolation_fraction = progress_fraction
+
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
             if forecaster_config.get("automation_off", False):
                 software_prog_multiplier = 1.0
             elif forecaster_config["patch_rd_speedup"]:
-                software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+                software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** interpolation_fraction
             else:
-                software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+                software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** interpolation_fraction
 
             # Track progress multiplier data
             prog_multiplier_trajectory.append((time + samples["announcement_delay"][i]/12, progress_fraction, software_prog_multiplier))
@@ -1009,17 +1600,23 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             # print(f"time: {time}")
             # Calculate progress fraction
             progress_fraction = progress / base_time_in_months[i]
-            
+
             current_horizon_minutes = get_horizon_at_progress(horizon_mappings[i], progress)
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
+
+            # Transform progress_fraction if using new model interpolation
+            if forecaster_config.get("use_new_model_interpolation", False):
+                interpolation_fraction = get_new_model_interpolation_fraction(progress_fraction)
+            else:
+                interpolation_fraction = progress_fraction
 
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
             if forecaster_config.get("automation_off", False):
                 software_prog_multiplier = 1.0
             elif forecaster_config["patch_rd_speedup"]:
-                software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+                software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** interpolation_fraction
             else:
-                software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+                software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** interpolation_fraction
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
             # Convert annual growth rate to daily rate for the time step
@@ -1456,6 +2053,97 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                     writer.writerow([forecaster, "subexponential", t, pf, pm])
     print(f"Saved progress multiplier trajectories to {output_dir / 'median_prog_multiplier_trajectories.csv'}")
 
+    # Run growth dynamics tracking for each forecaster's median trajectory
+    print("\n" + "="*60)
+    print("TRACKING GROWTH DYNAMICS FOR MEDIAN TRAJECTORIES")
+    print("="*60)
+    growth_dynamics_dir = output_dir / "growth_dynamics"
+    growth_dynamics_dir.mkdir(exist_ok=True)
+
+    for forecaster_key, forecaster_config in config["forecasters"].items():
+        forecaster_name = forecaster_config["name"]
+        print(f"Running growth dynamics for {forecaster_name}...")
+
+        # Run growth dynamics simulation
+        growth_dynamics, baseline_growth_value = run_median_trajectory_with_growth_dynamics(
+            config, forecaster_config, forecaster_name
+        )
+
+        # Save growth dynamics to CSV
+        csv_path = growth_dynamics_dir / f"growth_dynamics_{forecaster_name}.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "year",
+                "progress_fraction",
+                "human_only_research_contribution_annualized",
+                "software_prog_multiplier",
+                "research_contribution_annualized",
+                "research_stock",
+                "baseline_growth_annualized",
+                "actual_growth_annualized",
+                "relative_software_progress_rate"
+            ])
+            writer.writeheader()
+            for row in growth_dynamics:
+                writer.writerow(row)
+        print(f"  Saved growth dynamics CSV to {csv_path}")
+
+        # Create and save growth dynamics plot
+        plot_path = growth_dynamics_dir / f"growth_dynamics_{forecaster_name}.png"
+        fig = plot_growth_dynamics(
+            growth_dynamics,
+            baseline_growth_value,
+            forecaster_name,
+            config,
+            plot_path
+        )
+        plt.close(fig)
+        print(f"  Saved growth dynamics plot to {plot_path}")
+
+        # Check for external data file
+        external_csv_path = Path(__file__).parent.parent / "external" / "inputs" / "ai_progress_results_20251211_034612.csv"
+        external_csv_str = str(external_csv_path) if external_csv_path.exists() else None
+
+        # Create and save comparison plot with external data (if available)
+        if external_csv_str:
+            comparison_plot_path = growth_dynamics_dir / f"growth_dynamics_comparison_{forecaster_name}.png"
+            fig = plot_growth_dynamics_with_external_data(
+                growth_dynamics,
+                baseline_growth_value,
+                forecaster_name,
+                config,
+                comparison_plot_path,
+                external_csv_path=external_csv_str
+            )
+            plt.close(fig)
+            print(f"  Saved growth dynamics comparison plot to {comparison_plot_path}")
+
+        # Create and save software multiplier vs progress plot (normalized, linear scale)
+        multiplier_vs_progress_path = growth_dynamics_dir / f"software_multiplier_vs_progress_{forecaster_name}.png"
+        fig = plot_software_multiplier_vs_progress(
+            growth_dynamics,
+            forecaster_name,
+            config,
+            multiplier_vs_progress_path,
+            external_csv_path=external_csv_str
+        )
+        plt.close(fig)
+        print(f"  Saved software multiplier vs progress plot to {multiplier_vs_progress_path}")
+
+        # Create and save software multiplier vs progress plot (absolute, log scale)
+        multiplier_vs_progress_abs_path = growth_dynamics_dir / f"software_multiplier_vs_progress_absolute_{forecaster_name}.png"
+        fig = plot_software_multiplier_vs_progress_absolute(
+            growth_dynamics,
+            forecaster_name,
+            config,
+            multiplier_vs_progress_abs_path,
+            external_csv_path=external_csv_str
+        )
+        plt.close(fig)
+        print(f"  Saved software multiplier vs progress (absolute) plot to {multiplier_vs_progress_abs_path}")
+
+    print(f"Saved all growth dynamics files to {growth_dynamics_dir}")
+
     # Get current date as decimal year
     # current_date = datetime.now()
     # current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
@@ -1553,6 +2241,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
     fig_cdf.savefig(output_dir / "simple_combined_headline_cdf.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cdf)
 
+    # Save PDF and CDF data to CSVs
+    save_pdf_cdf_csvs(all_forecaster_results, config, output_dir)
+
     # Calculate and save HCP distributions
     print("\nCalculating HCP distributions...")
     hcp_data = calculate_hcp_distributions(
@@ -1562,6 +2253,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
         config,
         output_dir
     )
+
+    # Collection for all central trajectory parameters across forecasters and months
+    all_central_params = []
 
     for forecaster_name in all_forecaster_results.keys():
         # --- Figures that are independent of a specific SC month ---
@@ -1630,6 +2324,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
         target_months = [
             # March targets
             "February 2029",
+            "June 2028",
+            "June 2030",
+            "July 2030",
             # "March 2028",
             # "March 2029",
             # "March 2030",
@@ -1718,7 +2415,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                 bbox_inches="tight",
             )
 
-            # Save central trajectory data as CSV
+            # Save central trajectory data as CSV and collect parameters
             if central_path is not None:
                 central_df = pd.DataFrame({
                     'calendar_time': central_path['times'],
@@ -1728,6 +2425,25 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                     combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
                     index=False,
                 )
+                # Collect parameters for summary CSV
+                all_central_params.append({
+                    'forecaster': forecaster_name,
+                    'sc_month': sc_month_str,
+                    'sample_idx': central_path.get('sample_idx'),
+                    'h_SC_work_months': central_path.get('h_SC'),
+                    'T_t_doubling_time_months': central_path.get('T_t'),
+                    'cost_speed_months': central_path.get('cost_speed'),
+                    'announcement_delay_months': central_path.get('announcement_delay'),
+                    'present_prog_multiplier': central_path.get('present_prog_multiplier'),
+                    'SC_prog_multiplier': central_path.get('SC_prog_multiplier'),
+                    'is_exponential': central_path.get('is_exponential'),
+                    'is_superexponential': central_path.get('is_superexponential'),
+                    'is_subexponential': central_path.get('is_subexponential'),
+                    'patch_rd_speedup': central_path.get('patch_rd_speedup'),
+                    'software_progress_share': central_path.get('software_progress_share'),
+                    'se_doubling_decay_fraction': central_path.get('se_doubling_decay_fraction'),
+                    'sub_doubling_growth_fraction': central_path.get('sub_doubling_growth_fraction'),
+                })
 
             # Close month-specific figures to free memory
             plt.close(fig_trajectories)
@@ -1755,6 +2471,12 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             )
 
             plt.close(fig_cent_compare)
+
+    # Save summary CSV with all central trajectory parameters
+    if all_central_params:
+        central_params_df = pd.DataFrame(all_central_params)
+        central_params_df.to_csv(combined_dir / "central_trajectory_parameters.csv", index=False)
+        print(f"Saved central trajectory parameters to {combined_dir / 'central_trajectory_parameters.csv'}")
 
     return fig, all_forecaster_results
 

@@ -6,6 +6,83 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
+import json
+
+def load_trajectories_from_jsonl(jsonl_dir: str | Path) -> tuple[dict, dict, dict, dict]:
+    """
+    Load trajectory data from JSONL files in a directory.
+
+    Returns:
+        Tuple of (all_forecaster_backcast_trajectories, all_forecaster_trajectories,
+                  all_forecaster_samples, all_forecaster_results)
+    """
+    jsonl_dir = Path(jsonl_dir)
+
+    all_forecaster_backcast_trajectories = {}
+    all_forecaster_trajectories = {}
+    all_forecaster_samples = {}
+    all_forecaster_results = {}
+
+    for jsonl_file in jsonl_dir.glob("*_trajectories.jsonl"):
+        # Extract forecaster name from filename (e.g., "Eli_trajectories.jsonl" -> "Eli")
+        forecaster_name = jsonl_file.stem.replace("_trajectories", "")
+
+        backcast_list = []
+        forecast_list = []
+        results_list = []
+
+        # Initialize sample arrays
+        sample_keys = ['h_SC', 'T_t', 'cost_speed', 'announcement_delay',
+                       'present_prog_multiplier', 'SC_prog_multiplier',
+                       'patch_rd_speedup', 'software_progress_share',
+                       'is_exponential', 'is_superexponential', 'is_subexponential',
+                       'se_doubling_decay_fraction', 'sub_doubling_growth_fraction']
+        samples_dict = {k: [] for k in sample_keys}
+
+        with open(jsonl_file, 'r') as f:
+            for line in f:
+                record = json.loads(line)
+
+                # Extract trajectories
+                backcast_list.append(record.get('backcast_trajectory', []))
+                forecast_list.append(record.get('forward_trajectory', []))
+                results_list.append(record.get('sc_arrival_year', np.nan))
+
+                # Extract parameters
+                params = record.get('parameters', {})
+                samples_dict['h_SC'].append(params.get('h_SC', np.nan))
+                samples_dict['T_t'].append(params.get('T_t', np.nan))
+                samples_dict['cost_speed'].append(params.get('cost_speed', np.nan))
+                samples_dict['announcement_delay'].append(params.get('announcement_delay', np.nan))
+                samples_dict['present_prog_multiplier'].append(params.get('present_prog_multiplier', np.nan))
+                samples_dict['SC_prog_multiplier'].append(params.get('SC_prog_multiplier', np.nan))
+                samples_dict['patch_rd_speedup'].append(params.get('patch_rd_speedup', False))
+                samples_dict['software_progress_share'].append(params.get('software_progress_share', np.nan))
+
+                # Determine growth type flags
+                growth_type = record.get('growth_type', '')
+                samples_dict['is_exponential'].append(growth_type == 'exponential')
+                samples_dict['is_superexponential'].append(growth_type == 'superexponential')
+                samples_dict['is_subexponential'].append(growth_type == 'subexponential')
+
+                # These may not be in the JSONL, use defaults
+                samples_dict['se_doubling_decay_fraction'].append(params.get('se_doubling_decay_fraction', 0.5))
+                samples_dict['sub_doubling_growth_fraction'].append(params.get('sub_doubling_growth_fraction', 0.5))
+
+        # Convert to numpy arrays
+        for k in samples_dict:
+            samples_dict[k] = np.array(samples_dict[k])
+
+        all_forecaster_backcast_trajectories[forecaster_name] = backcast_list
+        all_forecaster_trajectories[forecaster_name] = forecast_list
+        all_forecaster_samples[forecaster_name] = samples_dict
+        all_forecaster_results[forecaster_name] = np.array(results_list)
+
+        print(f"Loaded {len(backcast_list)} trajectories for {forecaster_name} from {jsonl_file.name}")
+
+    return (all_forecaster_backcast_trajectories, all_forecaster_trajectories,
+            all_forecaster_samples, all_forecaster_results)
+
 
 def load_config(config_path: str) -> dict:
     """Load configuration from YAML file."""
@@ -257,6 +334,46 @@ def plot_results_cdf(all_forecaster_results: dict, config: dict, *, show_percent
     return fig
 
 
+def save_pdf_cdf_csvs(all_forecaster_results: dict, config: dict, output_dir: Path) -> None:
+    """Save PDF and CDF data points to CSV files for each forecaster.
+
+    Creates a subfolder 'cdf_and_pdf_csvs' in output_dir containing one CSV per forecaster.
+    Each CSV contains columns: x, pdf, cdf
+    """
+    csv_dir = output_dir / "cdf_and_pdf_csvs"
+    csv_dir.mkdir(exist_ok=True)
+
+    for name, results in all_forecaster_results.items():
+        # Filter out >2050 points for PDF (matching plot_results behavior)
+        valid_results = [r for r in results if r <= 2050]
+
+        if len(valid_results) < 2:
+            continue
+
+        # Compute PDF using KDE (same as plot_results)
+        kde = gaussian_kde(valid_results)
+        x_range = np.linspace(min(valid_results), max(valid_results), 200)
+        pdf_values = kde(x_range)
+
+        # Compute CDF: for each x value, compute the fraction of results <= x
+        # Using all results (not just valid_results) to match plot_results_cdf behavior
+        sorted_results = np.sort(results)
+        cdf_values = np.searchsorted(sorted_results, x_range, side='right') / len(sorted_results)
+
+        # Create dataframe and save
+        df = pd.DataFrame({
+            'x': x_range,
+            'pdf': pdf_values,
+            'cdf': cdf_values
+        })
+
+        # Sanitize forecaster name for filename
+        safe_name = name.replace(' ', '_').replace('(', '').replace(')', '').replace(',', '')
+        df.to_csv(csv_dir / f"{safe_name}_pdf_cdf.csv", index=False)
+
+    print(f"Saved PDF/CDF CSVs to {csv_dir}")
+
+
 def _parse_month_year(month_year_str: str) -> tuple[float, float, float]:
     """Return (start_decimal, end_decimal, mid_decimal) for a given 'Month YYYY'.
     Accepts both full (e.g. 'March 2027') and abbreviated (e.g. 'Mar 2027') month names.
@@ -461,8 +578,22 @@ def plot_combined_trajectories_sc_month(
     overlay_illustrative_trend: bool = False,
     add_agent_checkpoints: bool = False,
     forecaster_filter: list[str] = None,
+    jsonl_dir: str | Path = None,
 ) -> tuple[plt.Figure, dict|None]:
-    """Generalized version of `plot_combined_trajectories_march_2027`."""
+    """Generalized version of `plot_combined_trajectories_march_2027`.
+
+    Args:
+        jsonl_dir: Optional path to directory containing JSONL trajectory files.
+                   If provided, will load trajectories from JSONL instead of using
+                   the passed-in dictionaries.
+    """
+
+    # If jsonl_dir is provided, load trajectories from JSONL files
+    if jsonl_dir is not None:
+        (all_forecaster_backcast_trajectories,
+         all_forecaster_trajectories,
+         all_forecaster_samples,
+         all_forecaster_results) = load_trajectories_from_jsonl(jsonl_dir)
 
     month_start, month_end, month_mid = _parse_month_year(sc_month_str)
 
@@ -646,22 +777,75 @@ def plot_combined_trajectories_sc_month(
         if plot_median_curve and valid.any():
             ax.plot(x_grid[valid], 10**median_curve[valid], color='red', linewidth=2, linestyle=':', label='Median Trajectory', zorder=49)
         if valid.any():
-            # Only sum distances from 2025.25 (forecast start) up to the end of the SC month filter
-            time_mask = (x_grid >= 2025.25) & (x_grid <= month_end)
+            # Method 1: Old method - distances from 2025.25 (forecast start) up to the end of the SC month filter
+            time_mask_old = (x_grid >= 2025.25) & (x_grid <= month_end)
+            matrix_truncated_old = matrix[:, time_mask_old]
+            median_truncated_old = median_curve[time_mask_old]
+            distances_old = np.nanmean(np.abs(matrix_truncated_old - median_truncated_old), axis=1)
+            best_idx_old = np.nanargmin(distances_old)
+            best_path_old = all_combined_paths[int(best_idx_old)]
+            ax.plot(best_path_old['times'], best_path_old['horizons'], color='gray', linewidth=2, linestyle='--', label='Central Trajectory (forecast only)', zorder=47)
+
+            # Method 2: New method - distances from 2021.0 (backcast start) up to the end of the SC month filter
+            time_mask = (x_grid >= 2021.0) & (x_grid <= month_end)
             matrix_truncated = matrix[:, time_mask]
             median_truncated = median_curve[time_mask]
-            distances = np.nansum(np.abs(matrix_truncated - median_truncated), axis=1)
+            distances = np.nanmean(np.abs(matrix_truncated - median_truncated), axis=1)
+            # Exclude trajectories that don't have points before 2021.0
+            for i, p in enumerate(all_combined_paths):
+                if p['times'][0] >= 2021.0:
+                    distances[i] = np.inf
             best_idx = np.nanargmin(distances)
             best_path = all_combined_paths[int(best_idx)]
-            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', label='Central Trajectory (incl. backcast)', zorder=48)
+
+            # Method 3: Percentile-based z-score method from 2021.0
+            # For each trajectory at each timestep, compute percentile rank, convert to z-score, average abs(z)
+            n_traj, n_times = matrix_truncated.shape
+            z_scores_sum = np.zeros(n_traj)
+            z_scores_count = np.zeros(n_traj)
+            for t_idx in range(n_times):
+                col = matrix_truncated[:, t_idx]
+                valid_mask = ~np.isnan(col)
+                if valid_mask.sum() > 1:
+                    # Compute percentile rank for each trajectory at this timestep
+                    ranks = rankdata(col[valid_mask], method='average')
+                    percentiles = (ranks - 0.5) / len(ranks)  # map to (0, 1)
+                    # Convert percentile to z-score (number of SDs from mean in normal dist)
+                    z_vals = np.abs(norm.ppf(percentiles))
+                    # Add to running sum for valid trajectories
+                    valid_indices = np.where(valid_mask)[0]
+                    for i, z in zip(valid_indices, z_vals):
+                        z_scores_sum[i] += z
+                        z_scores_count[i] += 1
+            # Compute average z-score (avoid division by zero)
+            z_scores_avg = np.where(z_scores_count > 0, z_scores_sum / z_scores_count, np.inf)
+            # Exclude trajectories that don't have points before 2021.0
+            for i, p in enumerate(all_combined_paths):
+                if p['times'][0] >= 2021.0:
+                    z_scores_avg[i] = np.inf
+            best_idx_zscore = np.nanargmin(z_scores_avg)
+            best_path_zscore = all_combined_paths[int(best_idx_zscore)]
+            ax.plot(best_path_zscore['times'], best_path_zscore['horizons'], color='blue', linewidth=2, linestyle='--', label='Central Trajectory (z-score)', zorder=46)
 
             # Add sample parameters to best_path for downstream use
             forecaster_name = best_path.get('forecaster_name')
             sample_idx = best_path.get('sample_idx')
             if forecaster_name is not None and sample_idx is not None and forecaster_name in all_forecaster_samples:
                 samples = all_forecaster_samples[forecaster_name]
+                best_path['h_SC'] = float(samples['h_SC'][sample_idx])
+                best_path['T_t'] = float(samples['T_t'][sample_idx])
                 best_path['cost_speed'] = float(samples['cost_speed'][sample_idx])
                 best_path['announcement_delay'] = float(samples['announcement_delay'][sample_idx])
+                best_path['present_prog_multiplier'] = float(samples['present_prog_multiplier'][sample_idx])
+                best_path['SC_prog_multiplier'] = float(samples['SC_prog_multiplier'][sample_idx])
+                best_path['is_exponential'] = bool(samples['is_exponential'][sample_idx])
+                best_path['is_superexponential'] = bool(samples['is_superexponential'][sample_idx])
+                best_path['is_subexponential'] = bool(samples['is_subexponential'][sample_idx])
+                best_path['patch_rd_speedup'] = bool(samples['patch_rd_speedup'][sample_idx])
+                best_path['software_progress_share'] = float(samples['software_progress_share'][sample_idx])
+                best_path['se_doubling_decay_fraction'] = float(samples['se_doubling_decay_fraction']) if isinstance(samples['se_doubling_decay_fraction'], (int, float)) else float(samples['se_doubling_decay_fraction'][sample_idx])
+                best_path['sub_doubling_growth_fraction'] = float(samples['sub_doubling_growth_fraction']) if isinstance(samples['sub_doubling_growth_fraction'], (int, float)) else float(samples['sub_doubling_growth_fraction'][sample_idx])
 
             # -----------------------------------------------------------------
             # Add labelled check-points on the median trajectory (if requested)
@@ -686,8 +870,12 @@ def plot_combined_trajectories_sc_month(
     # Overlay illustrative SE trends if requested
     # ---------------------------------------------------------------------
     if overlay_illustrative_trend:
+        # Use script-relative paths so the CSVs are found regardless of cwd
+        script_dir = Path(__file__).resolve().parent
+        external_dir = script_dir.parent / "external"
+
         # Original illustrative graph trend (exp_power model)
-        original_trend_path = Path("../external/original_graph_trend_generated.csv")
+        original_trend_path = external_dir / "original_graph_trend_generated.csv"
         if original_trend_path.exists():
             try:
                 original_df = pd.read_csv(original_trend_path)
@@ -699,7 +887,7 @@ def plot_combined_trajectories_sc_month(
                 print(f"Warning: failed to plot original illustrative trend: {e}")
 
         # Fixed illustrative graph trend (horizon-doubling model)
-        fixed_trend_path = Path("../external/fixed_illustrative_graph_trend.csv")
+        fixed_trend_path = external_dir / "fixed_illustrative_graph_trend.csv"
         if fixed_trend_path.exists():
             try:
                 fixed_df = pd.read_csv(fixed_trend_path)
@@ -799,6 +987,7 @@ def plot_combined_trajectories_march_2027(
     overlay_illustrative_trend: bool = False,
     add_agent_checkpoints: bool = False,
     forecaster_filter: list[str] = None,
+    jsonl_dir: str | Path = None,
 ):
     """Backward-compatibility wrapper calling `plot_combined_trajectories_sc_month` with March 2027."""
     fig, _ = plot_combined_trajectories_sc_month(
@@ -815,6 +1004,7 @@ def plot_combined_trajectories_march_2027(
         overlay_illustrative_trend=overlay_illustrative_trend,
         add_agent_checkpoints=add_agent_checkpoints,
         forecaster_filter=forecaster_filter,
+        jsonl_dir=jsonl_dir,
     )
     return fig
 
@@ -1059,8 +1249,22 @@ def plot_combined_trajectories(
     plot_median_curve: bool = False,
     add_agent_checkpoints: bool = False,
     forecaster_filter: list[str] = None,
+    jsonl_dir: str | Path = None,
 ) -> plt.Figure:
-    """Create plot showing both backcasted and forecasted time horizon trajectories."""
+    """Create plot showing both backcasted and forecasted time horizon trajectories.
+
+    Args:
+        jsonl_dir: Optional path to directory containing JSONL trajectory files.
+                   If provided, will load trajectories from JSONL instead of using
+                   the passed-in dictionaries.
+    """
+    # If jsonl_dir is provided, load trajectories from JSONL files
+    if jsonl_dir is not None:
+        (all_forecaster_backcast_trajectories,
+         all_forecaster_trajectories,
+         all_forecaster_samples,
+         _) = load_trajectories_from_jsonl(jsonl_dir)
+
     background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
     
@@ -1272,22 +1476,75 @@ def plot_combined_trajectories(
             ax.plot(x_grid[valid], 10**median_curve[valid], color='red', linewidth=2, linestyle=':', label='Median Trajectory', zorder=49)
 
         if valid.any():
-            # Only sum distances from 2025.25 (forecast start)
-            time_mask = x_grid >= 2025.25
+            # Method 1: Old method - distances from 2025.25 (forecast start)
+            time_mask_old = x_grid >= 2025.25
+            matrix_truncated_old = matrix[:, time_mask_old]
+            median_truncated_old = median_curve[time_mask_old]
+            distances_old = np.nanmean(np.abs(matrix_truncated_old - median_truncated_old), axis=1)
+            best_idx_old = np.nanargmin(distances_old)
+            best_path_old = all_combined_paths[int(best_idx_old)]
+            ax.plot(best_path_old['times'], best_path_old['horizons'], color='gray', linewidth=2, linestyle='--', label='Central Trajectory (forecast only)', zorder=47)
+
+            # Method 2: New method - distances from 2021.0 (backcast start)
+            time_mask = x_grid >= 2021.0
             matrix_truncated = matrix[:, time_mask]
             median_truncated = median_curve[time_mask]
-            distances = np.nansum(np.abs(matrix_truncated - median_truncated), axis=1)
+            distances = np.nanmean(np.abs(matrix_truncated - median_truncated), axis=1)
+            # Exclude trajectories that don't have points before 2021.0
+            for i, p in enumerate(all_combined_paths):
+                if p['times'][0] >= 2021.0:
+                    distances[i] = np.inf
             best_idx = np.nanargmin(distances)
             best_path = all_combined_paths[int(best_idx)]
-            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', label='Central Trajectory', zorder=48)
+            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', label='Central Trajectory (incl. backcast)', zorder=48)
+
+            # Method 3: Percentile-based z-score method from 2021.0
+            # For each trajectory at each timestep, compute percentile rank, convert to z-score, average abs(z)
+            n_traj, n_times = matrix_truncated.shape
+            z_scores_sum = np.zeros(n_traj)
+            z_scores_count = np.zeros(n_traj)
+            for t_idx in range(n_times):
+                col = matrix_truncated[:, t_idx]
+                valid_mask = ~np.isnan(col)
+                if valid_mask.sum() > 1:
+                    # Compute percentile rank for each trajectory at this timestep
+                    ranks = rankdata(col[valid_mask], method='average')
+                    percentiles = (ranks - 0.5) / len(ranks)  # map to (0, 1)
+                    # Convert percentile to z-score (number of SDs from mean in normal dist)
+                    z_vals = np.abs(norm.ppf(percentiles))
+                    # Add to running sum for valid trajectories
+                    valid_indices = np.where(valid_mask)[0]
+                    for i, z in zip(valid_indices, z_vals):
+                        z_scores_sum[i] += z
+                        z_scores_count[i] += 1
+            # Compute average z-score (avoid division by zero)
+            z_scores_avg = np.where(z_scores_count > 0, z_scores_sum / z_scores_count, np.inf)
+            # Exclude trajectories that don't have points before 2021.0
+            for i, p in enumerate(all_combined_paths):
+                if p['times'][0] >= 2021.0:
+                    z_scores_avg[i] = np.inf
+            best_idx_zscore = np.nanargmin(z_scores_avg)
+            best_path_zscore = all_combined_paths[int(best_idx_zscore)]
+            ax.plot(best_path_zscore['times'], best_path_zscore['horizons'], color='blue', linewidth=2, linestyle='--', label='Central Trajectory (z-score)', zorder=46)
 
             # Add sample parameters to best_path for downstream use
             forecaster_name = best_path.get('forecaster_name')
             sample_idx = best_path.get('sample_idx')
             if forecaster_name is not None and sample_idx is not None and forecaster_name in all_forecaster_samples:
                 samples = all_forecaster_samples[forecaster_name]
+                best_path['h_SC'] = float(samples['h_SC'][sample_idx])
+                best_path['T_t'] = float(samples['T_t'][sample_idx])
                 best_path['cost_speed'] = float(samples['cost_speed'][sample_idx])
                 best_path['announcement_delay'] = float(samples['announcement_delay'][sample_idx])
+                best_path['present_prog_multiplier'] = float(samples['present_prog_multiplier'][sample_idx])
+                best_path['SC_prog_multiplier'] = float(samples['SC_prog_multiplier'][sample_idx])
+                best_path['is_exponential'] = bool(samples['is_exponential'][sample_idx])
+                best_path['is_superexponential'] = bool(samples['is_superexponential'][sample_idx])
+                best_path['is_subexponential'] = bool(samples['is_subexponential'][sample_idx])
+                best_path['patch_rd_speedup'] = bool(samples['patch_rd_speedup'][sample_idx])
+                best_path['software_progress_share'] = float(samples['software_progress_share'][sample_idx])
+                best_path['se_doubling_decay_fraction'] = float(samples['se_doubling_decay_fraction']) if isinstance(samples['se_doubling_decay_fraction'], (int, float)) else float(samples['se_doubling_decay_fraction'][sample_idx])
+                best_path['sub_doubling_growth_fraction'] = float(samples['sub_doubling_growth_fraction']) if isinstance(samples['sub_doubling_growth_fraction'], (int, float)) else float(samples['sub_doubling_growth_fraction'][sample_idx])
 
             # Optional annotated checkpoints
             if add_agent_checkpoints:
