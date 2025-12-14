@@ -19,6 +19,22 @@ set_disclaimer_variant("may")
 _new_model_interpolation_cache = None
 
 
+def get_latest_ai_progress_csv() -> Path | None:
+    """Find the latest ai_progress_results CSV file based on timestamp in filename."""
+    inputs_dir = Path(__file__).parent.parent / "external" / "inputs"
+    if not inputs_dir.exists():
+        return None
+
+    # Find all matching files
+    csv_files = list(inputs_dir.glob("ai_progress_results_*.csv"))
+    if not csv_files:
+        return None
+
+    # Sort by filename (timestamp in filename ensures correct ordering)
+    csv_files.sort(reverse=True)
+    return csv_files[0]
+
+
 def get_new_model_interpolation_fraction(progress_fraction: float) -> float:
     """
     Transform progress_fraction using the New Model (Dec 2025) curve.
@@ -34,9 +50,9 @@ def get_new_model_interpolation_fraction(progress_fraction: float) -> float:
 
     if _new_model_interpolation_cache is None:
         # Load external CSV and build interpolation
-        external_csv_path = Path(__file__).parent.parent / "external" / "inputs" / "ai_progress_results_20251211_034612.csv"
+        external_csv_path = get_latest_ai_progress_csv()
 
-        if not external_csv_path.exists():
+        if external_csv_path is None or not external_csv_path.exists():
             # Fall back to linear interpolation if file doesn't exist
             return progress_fraction
 
@@ -345,18 +361,32 @@ def run_median_trajectory_with_growth_dynamics(
     # Initialize labor-based research variables
     # Check if model_experiment_compute mode is enabled (forecaster can override)
     model_experiment_compute = forecaster_config.get("model_experiment_compute", config["simulation"].get("model_experiment_compute", False))
+    # Check if use_calendar_days mode is enabled (separate from model_experiment_compute)
+    use_calendar_days = forecaster_config.get("use_calendar_days", config["simulation"].get("use_calendar_days", False))
+
+    # Set days_per_year: 365 for use_calendar_days mode, 250 otherwise
+    days_per_year = 365 if use_calendar_days else 250
 
     if model_experiment_compute:
         # Use experiment compute mode initial values (different defaults than normal mode)
         labor_pool = forecaster_config.get("initial_labor_pool", 2000)
-        research_stock = forecaster_config.get("initial_research_stock", 1600)
-        experiment_compute = forecaster_config.get("initial_experiment_compute", config["simulation"].get("initial_experiment_compute", 120325))
+        research_stock = forecaster_config.get("initial_research_stock", 1280)
+        experiment_compute = forecaster_config.get("initial_experiment_compute", config["simulation"].get("initial_experiment_compute", 272983))
         experiment_compute_power = forecaster_config.get("experiment_compute_power", config["simulation"].get("experiment_compute_power", 0.45))
         experiment_compute_base_growth = forecaster_config.get("experiment_compute_base_growth", config["simulation"].get("experiment_compute_base_growth", 4.5))
+        experiment_compute_growth_schedule = forecaster_config.get("experiment_compute_growth_schedule", config["simulation"].get("experiment_compute_growth_schedule", None))
     else:
         labor_pool = config["simulation"]["initial_labor_pool"]
         research_stock = config["simulation"]["initial_research_stock"]
     labor_power = config["simulation"]["labor_power"]
+
+    # Check if dynamic initial research stock calculation is enabled
+    if forecaster_config.get("use_dynamic_initial_research_stock", False):
+        # initial_research_stock = (initial_labor_pool^labor_power)^2 / (labor_power * ln(1 + first_labor_growth_rate) * (initial_labor_pool^labor_power))
+        first_labor_growth_rate = forecaster_config["labor_growth_schedule"][0][1]
+        numerator = (labor_pool ** labor_power) ** 2
+        denominator = labor_power * np.log(1 + first_labor_growth_rate) * (labor_pool ** labor_power)
+        research_stock = numerator / denominator
 
     # Track growth dynamics
     growth_dynamics = []
@@ -389,7 +419,7 @@ def run_median_trajectory_with_growth_dynamics(
         # Get current labor growth rate from schedule
         current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
         # Convert annual growth rate to daily rate for the time step
-        daily_growth_rate = (1 + current_labor_growth_rate) ** (dt / 250) - 1
+        daily_growth_rate = (1 + current_labor_growth_rate) ** (dt / days_per_year) - 1
 
         # Calculate new labor added this period
         new_labor = labor_pool * daily_growth_rate
@@ -397,25 +427,24 @@ def run_median_trajectory_with_growth_dynamics(
 
         # Update experiment compute if in model_experiment_compute mode
         if model_experiment_compute:
-            # Get compute rate for current time using compute schedule
-            compute_rate = get_compute_rate(time, forecaster_config["compute_schedule"])
-            # Experiment compute grows at base_growth^compute_rate per year
-            # Convert to daily growth rate
-            daily_experiment_compute_growth = (experiment_compute_base_growth ** compute_rate) ** (dt / 250) - 1
+            # Get experiment compute growth rate for current time
+            annual_experiment_compute_growth = get_experiment_compute_growth_rate(time, experiment_compute_growth_schedule)
+            # Convert annual growth multiplier to daily growth rate
+            daily_experiment_compute_growth = annual_experiment_compute_growth ** (dt / days_per_year) - 1
             experiment_compute *= (1 + daily_experiment_compute_growth)
 
-            # Calculate research contribution: experiment_compute^0.45 * labor^0.3
-            research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (250 / dt)
-            human_only_research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * 1.0) / (250 / dt)
+            # Calculate research contribution: experiment_compute^0.45 * labor^0.3, scaled by 1/3.14 to match new model
+            research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (days_per_year / dt) / 3.14
+            human_only_research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * 1.0) / (days_per_year / dt) / 3.14
         else:
             # Calculate research contribution (actual, with software multiplier) - per timestep
-            research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * software_prog_multiplier) / (250 / dt)
+            research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * software_prog_multiplier) / (days_per_year / dt)
             # Calculate human-only research contribution (as if software_prog_multiplier were 1) - per timestep
-            human_only_research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * 1.0) / (250 / dt)
+            human_only_research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * 1.0) / (days_per_year / dt)
 
-        # Annualize research contributions (250 working days per year)
-        research_contribution_annualized = research_contribution * (250 / dt)
-        human_only_research_contribution_annualized = human_only_research_contribution * (250 / dt)
+        # Annualize research contributions
+        research_contribution_annualized = research_contribution * (days_per_year / dt)
+        human_only_research_contribution_annualized = human_only_research_contribution * (days_per_year / dt)
 
         # Add to research stock
         new_research_stock = research_stock + research_contribution
@@ -423,8 +452,8 @@ def run_median_trajectory_with_growth_dynamics(
         # Calculate actual growth rate (per timestep)
         actual_growth = new_research_stock / research_stock
 
-        # Annualize growth rates (250 working days per year)
-        actual_growth_annualized = actual_growth ** (250 / dt)
+        # Annualize growth rates
+        actual_growth_annualized = actual_growth ** (days_per_year / dt)
 
         # Set baseline growth on first iteration
         if progress == 0:
@@ -445,6 +474,8 @@ def run_median_trajectory_with_growth_dynamics(
             "baseline_growth_annualized": baseline_growth_annualized,
             "actual_growth_annualized": actual_growth_annualized,
             "relative_software_progress_rate": growth_ratio,
+            "labor_pool": labor_pool,
+            "experiment_compute": experiment_compute if model_experiment_compute else None,
         })
 
         # Get compute rate for current time using compute schedule
@@ -573,12 +604,16 @@ def plot_growth_dynamics_with_external_data(
     research_stock = [d["research_stock"] for d in growth_dynamics]
     research_effort = [d["research_contribution_annualized"] for d in growth_dynamics]
     relative_sw_progress = [d["relative_software_progress_rate"] for d in growth_dynamics]
+    labor_pool = [d["labor_pool"] for d in growth_dynamics]
+    experiment_compute = [d["experiment_compute"] for d in growth_dynamics]
 
     # Plot model data (solid lines)
     ax.plot(years, software_mult, label="Previous Model (Apr 2025): Software Progress Multiplier", color="#ff7f0e", linewidth=2)
     ax.plot(years, research_stock, label="Previous Model (Apr 2025): Research Stock", color="#d62728", linewidth=2)
     ax.plot(years, research_effort, label="Previous Model (Apr 2025): Research Effort", color="#2ca02c", linewidth=2)
     ax.plot(years, relative_sw_progress, label="Previous Model (Apr 2025): Relative Software Progress Rate", color="#e377c2", linewidth=2)
+    if experiment_compute[0] is not None:
+        ax.plot(years, experiment_compute, label="Previous Model (Apr 2025): Experiment Compute", color="#9467bd", linewidth=2)
 
     # Load and plot external data if provided
     if external_csv_path and Path(external_csv_path).exists():
@@ -607,6 +642,12 @@ def plot_growth_dynamics_with_external_data(
                 label="New Model (Dec 2025): Research Effort", color="#2ca02c", linewidth=2, linestyle='--')
         ax.plot(ext_df['time'], ext_df['relative_software_progress_rate'],
                 label="New Model (Dec 2025): Relative Software Progress Rate", color="#e377c2", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['human_labor_contribution'],
+                label="New Model (Dec 2025): Human Coding Labor", color="#1f77b4", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['human_only_experiment_capacity'],
+                label="New Model (Dec 2025): Human Only Experiment Capacity", color="#17becf", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['experiment_compute'],
+                label="New Model (Dec 2025): Experiment Compute", color="#9467bd", linewidth=2, linestyle='--')
 
     # Configure plot
     ax.set_title(f"Growth Dynamics Comparison - {forecaster_name}",
@@ -614,6 +655,10 @@ def plot_growth_dynamics_with_external_data(
     ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Value (log scale)", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
     ax.set_yscale("log")
+
+    # Extend y-axis upper limit to make room for legend
+    y_min, _ = ax.get_ylim()
+    ax.set_ylim(y_min, 1e22)
 
     # Grid and spines
     ax.grid(True, alpha=0.3, zorder=0)
@@ -633,6 +678,223 @@ def plot_growth_dynamics_with_external_data(
 
     # Save the figure
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_inputs_comparison(
+    growth_dynamics: list,
+    forecaster_name: str,
+    config: dict,
+    output_path: Path,
+    external_csv_path: str = None,
+) -> plt.Figure:
+    """Plot inputs comparison: human coding labor and experiment compute for both models."""
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Extract model data
+    years = [d["year"] for d in growth_dynamics]
+    labor_pool = [d["labor_pool"] for d in growth_dynamics]
+    experiment_compute = [d["experiment_compute"] for d in growth_dynamics]
+
+    # Plot model data (solid lines)
+    ax.plot(years, labor_pool, label="Previous Model (Apr 2025): Labor", color="#1f77b4", linewidth=2)
+    if experiment_compute[0] is not None:
+        ax.plot(years, experiment_compute, label="Previous Model (Apr 2025): Experiment Compute", color="#9467bd", linewidth=2)
+
+    # Load and plot external data if provided
+    if external_csv_path and Path(external_csv_path).exists():
+        # Read external CSV, skipping comment lines
+        ext_df = pd.read_csv(external_csv_path, comment='#')
+
+        # Filter to relevant time range (around the model's time range)
+        min_year = min(years) - 1
+        max_year = max(years) + 1
+        ext_df = ext_df[(ext_df['time'] >= min_year) & (ext_df['time'] <= max_year)]
+
+        # Plot external data (dashed lines)
+        ax.plot(ext_df['time'], ext_df['human_labor_contribution'],
+                label="New Model (Dec 2025): Human Coding Labor", color="#1f77b4", linewidth=2, linestyle='--')
+        ax.plot(ext_df['time'], ext_df['experiment_compute'],
+                label="New Model (Dec 2025): Experiment Compute", color="#9467bd", linewidth=2, linestyle='--')
+
+    # Configure plot
+    ax.set_title(f"Inputs Comparison - {forecaster_name}",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Value (log scale)", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_yscale("log")
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    fig.tight_layout()
+
+    # Save the figure
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_forecaster_comparison(
+    growth_dynamics_list: list[tuple[str, list]],
+    config: dict,
+    output_path: Path,
+) -> plt.Figure:
+    """Plot growth dynamics comparison between multiple forecasters.
+
+    Args:
+        growth_dynamics_list: List of (forecaster_name, growth_dynamics) tuples
+        config: Configuration dict
+        output_path: Path to save the figure
+    """
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Define colors for each metric (same color for both forecasters)
+    metric_colors = {
+        'research_stock': '#d62728',      # red
+        'research_effort': '#2ca02c',     # green
+        'software_mult': '#ff7f0e',       # orange
+        'relative_sw_progress': '#e377c2', # pink
+        'experiment_compute': '#9467bd',  # purple
+        'relative_effort_growth': '#17becf',  # cyan
+    }
+
+    for idx, (forecaster_name, growth_dynamics) in enumerate(growth_dynamics_list):
+        # First forecaster (use_calendar_days) is dotted, second (model_experiment_compute) is solid
+        is_dotted = (idx == 0)
+        linestyle = ':' if is_dotted else '-'
+        years = [d["year"] for d in growth_dynamics]
+
+        # Plot key metrics
+        research_stock = [d["research_stock"] for d in growth_dynamics]
+        research_effort = [d["research_contribution_annualized"] for d in growth_dynamics]
+        experiment_compute = [d["experiment_compute"] for d in growth_dynamics]
+        software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
+        relative_sw_progress = [d["relative_software_progress_rate"] for d in growth_dynamics]
+
+        # Calculate relative growth rate of research effort (current growth / initial growth)
+        # Growth rate at each point is (effort[i+1] - effort[i]) / effort[i], annualized
+        effort_growth_rates = []
+        for i in range(len(research_effort)):
+            if i == 0:
+                # For first point, use forward difference
+                if len(research_effort) > 1:
+                    dt_years = years[1] - years[0]
+                    growth_rate = (research_effort[1] / research_effort[0]) ** (1 / dt_years) - 1
+                else:
+                    growth_rate = 0
+            else:
+                dt_years = years[i] - years[i-1]
+                if dt_years > 0 and research_effort[i-1] > 0:
+                    growth_rate = (research_effort[i] / research_effort[i-1]) ** (1 / dt_years) - 1
+                else:
+                    growth_rate = 0
+            effort_growth_rates.append(growth_rate)
+
+        # Normalize by initial growth rate
+        initial_growth_rate = effort_growth_rates[0] if effort_growth_rates[0] != 0 else 1
+        relative_effort_growth = [g / initial_growth_rate if initial_growth_rate != 0 else 0 for g in effort_growth_rates]
+
+        ax.plot(years, research_stock, label=f"{forecaster_name}: Research Stock",
+                color=metric_colors['research_stock'], linewidth=2, linestyle=linestyle)
+        ax.plot(years, research_effort, label=f"{forecaster_name}: Research Effort",
+                color=metric_colors['research_effort'], linewidth=2, linestyle=linestyle)
+        ax.plot(years, relative_sw_progress, label=f"{forecaster_name}: Relative SW Progress Rate",
+                color=metric_colors['relative_sw_progress'], linewidth=2, linestyle=linestyle)
+        ax.plot(years, relative_effort_growth, label=f"{forecaster_name}: Relative Effort Growth Rate",
+                color=metric_colors['relative_effort_growth'], linewidth=2, linestyle=linestyle)
+        if experiment_compute[0] is not None:
+            ax.plot(years, experiment_compute, label=f"{forecaster_name}: Experiment Compute",
+                    color=metric_colors['experiment_compute'], linewidth=2, linestyle=linestyle)
+
+    # Configure plot
+    ax.set_title("Growth Dynamics: Forecaster Comparison",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Value (log scale)", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_yscale("log")
+
+    # Extend y-axis upper limit
+    y_min, _ = ax.get_ylim()
+    ax.set_ylim(y_min, 1e18)
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"] - 4, framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def run_forecaster_comparison(config_path: str, forecaster_names: list[str], output_path: Path) -> plt.Figure:
+    """Run and compare growth dynamics for specified forecasters."""
+    config = load_config(config_path)
+    config["forecasters"] = apply_inheritance_to_forecasters(config["forecasters"])
+
+    growth_dynamics_list = []
+
+    for forecaster_name in forecaster_names:
+        if forecaster_name not in config["forecasters"]:
+            print(f"Warning: Forecaster '{forecaster_name}' not found in config")
+            continue
+
+        forecaster_config = config["forecasters"][forecaster_name]
+
+        # Run median trajectory to get growth dynamics
+        growth_dynamics, baseline_growth = run_median_trajectory_with_growth_dynamics(
+            config, forecaster_config, forecaster_name
+        )
+
+        growth_dynamics_list.append((forecaster_name, growth_dynamics))
+
+        # Print some summary stats
+        print(f"\n{forecaster_name}:")
+        print(f"  use_calendar_days: {forecaster_config.get('use_calendar_days', False)}")
+        print(f"  model_experiment_compute: {forecaster_config.get('model_experiment_compute', False)}")
+        if growth_dynamics:
+            print(f"  Initial research stock: {growth_dynamics[0]['research_stock']:.2f}")
+            print(f"  Final research stock: {growth_dynamics[-1]['research_stock']:.2f}")
+            print(f"  Initial research effort: {growth_dynamics[0]['research_contribution_annualized']:.2f}")
+            print(f"  Final research effort: {growth_dynamics[-1]['research_contribution_annualized']:.2f}")
+
+    # Create comparison plot
+    fig = plot_forecaster_comparison(growth_dynamics_list, config, output_path)
 
     return fig
 
@@ -1276,21 +1538,57 @@ def get_compute_rate(t: float, compute_schedule: list) -> float:
 
 def get_labor_growth_rate(t: float, labor_growth_schedule: list) -> float:
     """Calculate labor growth rate based on time and labor growth schedule.
-    
+
     Args:
         t: Current time in years
         labor_growth_schedule: List of [year, rate] pairs, sorted by year
     """
     # Default rate is 0.5 (same as before)
     current_rate = 0.5
-    
+
     # Find the most recent schedule entry that applies
     for year, rate in labor_growth_schedule:
         if t >= year:
             current_rate = rate
         else:
             break
-            
+
+    return current_rate
+
+
+# Default experiment compute growth schedule (year, annual growth multiplier)
+DEFAULT_EXPERIMENT_COMPUTE_GROWTH_SCHEDULE = [
+    [2025, 3.9],
+    [2026, 3.5],
+    [2027, 3.0],
+    [2028, 2.7],
+    [2029, 2.8],
+    [2030, 2.0],
+    [2031, 1.8],
+]
+
+
+def get_experiment_compute_growth_rate(t: float, experiment_compute_growth_schedule: list = None) -> float:
+    """Get experiment compute annual growth multiplier based on time.
+
+    Args:
+        t: Current time in years
+        experiment_compute_growth_schedule: List of [year, rate] pairs. If None, uses default schedule.
+
+    Returns:
+        Annual growth multiplier (e.g., 3.9 means 3.9x per year)
+    """
+    if experiment_compute_growth_schedule is None:
+        experiment_compute_growth_schedule = DEFAULT_EXPERIMENT_COMPUTE_GROWTH_SCHEDULE
+
+    current_rate = 3.9  # Default to 2025 rate
+
+    for year, rate in experiment_compute_growth_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+
     return current_rate
 
 def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: float, dt: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict, simulation_config: dict) -> tuple[np.ndarray, list]:
@@ -1322,6 +1620,8 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
 
     # Check if model_experiment_compute mode is enabled (forecaster can override)
     model_experiment_compute = forecaster_config.get("model_experiment_compute", simulation_config.get("model_experiment_compute", False))
+    # Check if use_calendar_days mode is enabled (separate from model_experiment_compute)
+    use_calendar_days = forecaster_config.get("use_calendar_days", simulation_config.get("use_calendar_days", False))
 
     # Run simulation for each sample with progress bar
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
@@ -1341,17 +1641,29 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             continue
 
         # Initialize labor-based research variables
+        # Set days_per_year: 365 for use_calendar_days mode, 250 otherwise
+        days_per_year = 365 if use_calendar_days else 250
+
         if model_experiment_compute:
             # Use experiment compute mode initial values (different defaults than normal mode)
             labor_pool = forecaster_config.get("initial_labor_pool", 2000)
-            research_stock = forecaster_config.get("initial_research_stock", 1600)
-            experiment_compute = forecaster_config.get("initial_experiment_compute", simulation_config.get("initial_experiment_compute", 120325))
+            research_stock = forecaster_config.get("initial_research_stock", 1280)
+            experiment_compute = forecaster_config.get("initial_experiment_compute", simulation_config.get("initial_experiment_compute", 272983))
             experiment_compute_power = forecaster_config.get("experiment_compute_power", simulation_config.get("experiment_compute_power", 0.45))
             experiment_compute_base_growth = forecaster_config.get("experiment_compute_base_growth", simulation_config.get("experiment_compute_base_growth", 4.5))
+            experiment_compute_growth_schedule = forecaster_config.get("experiment_compute_growth_schedule", simulation_config.get("experiment_compute_growth_schedule", None))
         else:
             labor_pool = simulation_config["initial_labor_pool"]
             research_stock = simulation_config["initial_research_stock"]
         labor_power = simulation_config["labor_power"]
+
+        # Check if dynamic initial research stock calculation is enabled
+        if forecaster_config.get("use_dynamic_initial_research_stock", False):
+            # initial_research_stock = (initial_labor_pool^labor_power)^2 / (labor_power * ln(1 + first_labor_growth_rate) * (initial_labor_pool^labor_power))
+            first_labor_growth_rate = forecaster_config["labor_growth_schedule"][0][1]
+            numerator = (labor_pool ** labor_power) ** 2
+            denominator = labor_power * np.log(1 + first_labor_growth_rate) * (labor_pool ** labor_power)
+            research_stock = numerator / denominator
 
         # Track previous labor growth rate to detect changes
         prev_labor_growth_rate = None
@@ -1386,7 +1698,7 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
             # Convert annual growth rate to daily rate for the time step
-            daily_growth_rate = (1 + current_labor_growth_rate) ** (dt/250) - 1
+            daily_growth_rate = (1 + current_labor_growth_rate) ** (dt / days_per_year) - 1
 
             # Calculate new labor added this period
             new_labor = labor_pool * daily_growth_rate
@@ -1394,18 +1706,17 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
 
             # Update experiment compute and calculate research contribution
             if model_experiment_compute:
-                # Get compute rate for current time using compute schedule
-                compute_rate_for_experiment = get_compute_rate(time, forecaster_config["compute_schedule"])
-                # Experiment compute grows at base_growth^compute_rate per year
-                # Convert to daily growth rate
-                daily_experiment_compute_growth = (experiment_compute_base_growth ** compute_rate_for_experiment) ** (dt / 250) - 1
+                # Get experiment compute growth rate for current time
+                annual_experiment_compute_growth = get_experiment_compute_growth_rate(time, experiment_compute_growth_schedule)
+                # Convert annual growth multiplier to daily growth rate
+                daily_experiment_compute_growth = annual_experiment_compute_growth ** (dt / days_per_year) - 1
                 experiment_compute *= (1 + daily_experiment_compute_growth)
 
-                # Calculate research contribution: experiment_compute^0.45 * labor^0.3
-                research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (250/dt)
+                # Calculate research contribution: experiment_compute^0.45 * labor^0.3, scaled by 1/3.14 to match new model
+                research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (days_per_year / dt) / 3.14
             else:
                 # Calculate research contribution on a yearly basis, then divide
-                research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
+                research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (days_per_year / dt)
             # Add to research stock
             new_research_stock = research_stock + research_contribution
             # Calculate actual growth rate (annualized)
@@ -1636,6 +1947,8 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
 
     # Check if model_experiment_compute mode is enabled (forecaster can override)
     model_experiment_compute = forecaster_config.get("model_experiment_compute", simulation_config.get("model_experiment_compute", False))
+    # Check if use_calendar_days mode is enabled (separate from model_experiment_compute)
+    use_calendar_days = forecaster_config.get("use_calendar_days", simulation_config.get("use_calendar_days", False))
 
     # Run simulation for each sample with progress bar
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
@@ -1649,17 +1962,29 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             continue
 
         # Initialize labor-based research variables
+        # Set days_per_year: 365 for use_calendar_days mode, 250 otherwise
+        days_per_year = 365 if use_calendar_days else 250
+
         if model_experiment_compute:
             # Use experiment compute mode initial values (different defaults than normal mode)
             labor_pool = forecaster_config.get("initial_labor_pool", 2000)
-            research_stock = forecaster_config.get("initial_research_stock", 1600)
-            experiment_compute = forecaster_config.get("initial_experiment_compute", simulation_config.get("initial_experiment_compute", 120325))
+            research_stock = forecaster_config.get("initial_research_stock", 1280)
+            experiment_compute = forecaster_config.get("initial_experiment_compute", simulation_config.get("initial_experiment_compute", 272983))
             experiment_compute_power = forecaster_config.get("experiment_compute_power", simulation_config.get("experiment_compute_power", 0.45))
             experiment_compute_base_growth = forecaster_config.get("experiment_compute_base_growth", simulation_config.get("experiment_compute_base_growth", 4.5))
+            experiment_compute_growth_schedule = forecaster_config.get("experiment_compute_growth_schedule", simulation_config.get("experiment_compute_growth_schedule", None))
         else:
             labor_pool = simulation_config["initial_labor_pool"]
             research_stock = simulation_config["initial_research_stock"]
         labor_power = simulation_config["labor_power"]
+
+        # Check if dynamic initial research stock calculation is enabled
+        if forecaster_config.get("use_dynamic_initial_research_stock", False):
+            # initial_research_stock = (initial_labor_pool^labor_power)^2 / (labor_power * ln(1 + first_labor_growth_rate) * (initial_labor_pool^labor_power))
+            first_labor_growth_rate = forecaster_config["labor_growth_schedule"][0][1]
+            numerator = (labor_pool ** labor_power) ** 2
+            denominator = labor_power * np.log(1 + first_labor_growth_rate) * (labor_pool ** labor_power)
+            research_stock = numerator / denominator
 
         # Track previous labor growth rate to detect changes
         prev_labor_growth_rate = None
@@ -1694,7 +2019,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
             # Convert annual growth rate to daily rate for the time step
-            daily_growth_rate = (1 + current_labor_growth_rate) ** (dt/250) - 1
+            daily_growth_rate = (1 + current_labor_growth_rate) ** (dt / days_per_year) - 1
             # print(f"daily_growth_rate: {daily_growth_rate}")
             # Calculate new labor added this period
             new_labor = labor_pool * daily_growth_rate
@@ -1702,23 +2027,22 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
 
             # Update experiment compute and calculate research contribution
             if model_experiment_compute:
-                # Get compute rate for current time using compute schedule (backcast uses rate of 1)
-                compute_rate_for_experiment = 1  # Use constant rate for backcasting
-                # Experiment compute grows at base_growth^compute_rate per year
-                # Convert to daily growth rate (note: dt is negative for backcast)
-                daily_experiment_compute_growth = (experiment_compute_base_growth ** compute_rate_for_experiment) ** (dt / 250) - 1
+                # Get experiment compute growth rate for current time
+                annual_experiment_compute_growth = get_experiment_compute_growth_rate(time, experiment_compute_growth_schedule)
+                # Convert annual growth multiplier to daily growth rate (note: dt is negative for backcast)
+                daily_experiment_compute_growth = annual_experiment_compute_growth ** (dt / days_per_year) - 1
                 experiment_compute *= (1 + daily_experiment_compute_growth)
 
-                # Calculate research contribution: experiment_compute^0.45 * labor^0.3
-                research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (250/dt)
+                # Calculate research contribution: experiment_compute^0.45 * labor^0.3, scaled by 1/3.14 to match new model
+                research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (days_per_year / dt) / 3.14
             else:
                 # Calculate research contribution on a yearly basis, then divide
-                research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
+                research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (days_per_year / dt)
             # Add to research stock
             new_research_stock = research_stock + research_contribution
             # print(f"new_research_stock: {new_research_stock}")
             # Calculate actual growth rate (annualized)
-            actual_growth = (new_research_stock / research_stock) ** (250/(dt)) - 1
+            actual_growth = (new_research_stock / research_stock) ** (days_per_year / dt) - 1
             
 
             # Calculate adjustment factor based on growth rate ratio
@@ -2168,7 +2492,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                 "research_stock",
                 "baseline_growth_annualized",
                 "actual_growth_annualized",
-                "relative_software_progress_rate"
+                "relative_software_progress_rate",
+                "labor_pool",
+                "experiment_compute"
             ])
             writer.writeheader()
             for row in growth_dynamics:
@@ -2188,8 +2514,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
         print(f"  Saved growth dynamics plot to {plot_path}")
 
         # Check for external data file
-        external_csv_path = Path(__file__).parent.parent / "external" / "inputs" / "ai_progress_results_20251211_034612.csv"
-        external_csv_str = str(external_csv_path) if external_csv_path.exists() else None
+        external_csv_path = get_latest_ai_progress_csv()
+        external_csv_str = str(external_csv_path) if external_csv_path and external_csv_path.exists() else None
 
         # Create and save comparison plot with external data (if available)
         if external_csv_str:
@@ -2204,6 +2530,18 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             )
             plt.close(fig)
             print(f"  Saved growth dynamics comparison plot to {comparison_plot_path}")
+
+            # Create and save inputs comparison plot
+            inputs_plot_path = growth_dynamics_dir / f"inputs_comparison_{forecaster_name}.png"
+            fig = plot_inputs_comparison(
+                growth_dynamics,
+                forecaster_name,
+                config,
+                inputs_plot_path,
+                external_csv_path=external_csv_str
+            )
+            plt.close(fig)
+            print(f"  Saved inputs comparison plot to {inputs_plot_path}")
 
         # Create and save software multiplier vs progress plot (normalized, linear scale)
         multiplier_vs_progress_path = growth_dynamics_dir / f"software_multiplier_vs_progress_{forecaster_name}.png"
