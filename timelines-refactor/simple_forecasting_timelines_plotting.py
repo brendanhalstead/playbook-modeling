@@ -206,7 +206,12 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
         
         # Filter out >2050 points for density plot only
         valid_results = [r for r in results if r <= 2050]
-        
+
+        # Skip KDE if not enough valid results
+        if len(valid_results) < 2:
+            print(f"Warning: {name} has fewer than 2 results <= 2050, skipping KDE plot")
+            continue
+
         # Use KDE for smooth density estimation
         kde = gaussian_kde(valid_results)
         x_range = np.linspace(min(valid_results), max(valid_results), 200)
@@ -834,7 +839,7 @@ def plot_combined_trajectories_sc_month(
             if forecaster_name is not None and sample_idx is not None and forecaster_name in all_forecaster_samples:
                 samples = all_forecaster_samples[forecaster_name]
                 best_path['h_SC'] = float(samples['h_SC'][sample_idx])
-                best_path['T_t'] = float(samples['T_t'][sample_idx])
+                best_path['T_t'] = float(samples.get('T_t', samples.get('horizon_doubling_time'))[sample_idx])
                 best_path['cost_speed'] = float(samples['cost_speed'][sample_idx])
                 best_path['announcement_delay'] = float(samples['announcement_delay'][sample_idx])
                 best_path['present_prog_multiplier'] = float(samples['present_prog_multiplier'][sample_idx])
@@ -1828,7 +1833,7 @@ def plot_combined_trajectories(
             if forecaster_name is not None and sample_idx is not None and forecaster_name in all_forecaster_samples:
                 samples = all_forecaster_samples[forecaster_name]
                 best_path['h_SC'] = float(samples['h_SC'][sample_idx])
-                best_path['T_t'] = float(samples['T_t'][sample_idx])
+                best_path['T_t'] = float(samples.get('T_t', samples.get('horizon_doubling_time'))[sample_idx])
                 best_path['cost_speed'] = float(samples['cost_speed'][sample_idx])
                 best_path['announcement_delay'] = float(samples['announcement_delay'][sample_idx])
                 best_path['present_prog_multiplier'] = float(samples['present_prog_multiplier'][sample_idx])

@@ -11,6 +11,11 @@ simulation:
   initial_labor_pool: 1000  # Initial size of labor pool (L)
   labor_power: 0.3          # Exponent to translate labor increases to overall research progress (M)
   initial_research_stock: 50  # Initial stock of research progress years (S)
+  # Experiment compute mode parameters (only used when model_experiment_compute is True)
+  model_experiment_compute: False  # If True, use experiment compute model
+  initial_experiment_compute: 120325  # Initial experiment compute value
+  experiment_compute_power: 0.45  # Exponent for experiment compute contribution
+  experiment_compute_base_growth: 4.5  # Base annual growth rate for experiment compute (4.5x/year)
 
 # Plotting style configuration  
 plotting_style:
@@ -31,8 +36,8 @@ plotting_style:
 
 # Forecaster configurations
 forecasters:
-  aird_dm_fix:
-    name: "aird_dm_fix"
+  aird_dm_fix_superexp_at_start:
+    name: "aird_dm_fix_superexp_at_start"
     color: "#900000"  
     compute_schedule: [[2029, 0.5]]  # List of [year, rate] pairs
     labor_growth_schedule: [[2025, 0.5], [2028, 0.4], [2029, 0.2], [2030, 0.15], [2031, 0.1]]  # List of [year, rate] pairs for annual labor growth
@@ -45,7 +50,7 @@ forecasters:
       announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
       present_prog_multiplier_ci: [0.1, 0.10001]  # Progress multiplier at present - 1
       SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
-      superexponential_schedule_months: [[0.0014, 0.9]]  # List of [horizon_months, cumulative_probability] pairs. If you further decrease the starting time horizon, you should add new lower entries.
+      superexponential_schedule_months: [[0.0014, 0.9]]  # List of [horizon_months, cumulative_probability] pairs. If you further decrease the starting time horizon, you should add new lower entries.   
       p_subexponential: 0.10    # Probability of subexponential growth
       se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
       sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
@@ -53,7 +58,7 @@ forecasters:
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
   param_estimate_changes:
     name: "param_estimate_changes"
-    parent: "aird_dm_fix"
+    parent: "aird_dm_fix_superexp_at_start"
     color: "#003000"
     initial_software_progress_share_ci: [0.61, 0.61001] # 80% CI for fraction of progress from software (vs compute). 0.5 = equal weighting (original behavior)
     current_horizon: 26
@@ -64,7 +69,7 @@ forecasters:
       h_SC_ci: [1200, 1200.0001] # Months needed for SC
       cost_speed_ci: [13, 13.001] # Coding efficiency in months 
       SC_prog_multiplier_ci: [18.5, 18.501]  # Progress multiplier at SC - 1
-      present_prog_multiplier_ci: [0.085, 0.0851]  # Progress multiplier at present - 1    
+      present_prog_multiplier_ci: [0.085, 0.0851]  # Progress multiplier at present - 1 
   patched_rd_speedup_only:
     name: "patched_rd_speedup_only"
     parent: "param_estimate_changes"
@@ -81,9 +86,14 @@ forecasters:
   #   parent: "patched_rd_speedup"
   #   color: "#003000"
   #   automation_off: True
+  model_experiment_compute:
+    name: "model_experiment_compute"
+    parent: "new_model_interpolation"
+    color: "#003000"
+    model_experiment_compute: True
   no_internal_external_gap:
     name: "no_internal_external_gap"
-    parent: "new_model_interpolation"
+    parent: "model_experiment_compute"
     color: "#003000"
     distributions:
       announcement_delay_ci: [0.0001, 0.00011]  # Announcement delay in months (1 week to 6 months)

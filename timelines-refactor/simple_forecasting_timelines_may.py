@@ -195,6 +195,12 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
 
+    # Patch R&D speedup - read from forecaster config (not inside distributions)
+    samples["patch_rd_speedup"] = np.full(n_sims, config.get("patch_rd_speedup", False))
+
+    # Alias for plotting compatibility
+    samples["software_progress_share"] = samples["initial_software_progress_share"]
+
     return samples
 
 
@@ -275,6 +281,12 @@ def get_median_samples(config: dict) -> dict:
     # Growth/decay parameters
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
 
+    # Patch R&D speedup - read from forecaster config (not inside distributions)
+    samples["patch_rd_speedup"] = np.array([config.get("patch_rd_speedup", False)])
+
+    # Alias for plotting compatibility
+    samples["software_progress_share"] = samples["initial_software_progress_share"]
+
     return samples
 
 
@@ -331,8 +343,19 @@ def run_median_trajectory_with_growth_dynamics(
     dt_in_months = dt / 30.5
 
     # Initialize labor-based research variables
-    labor_pool = config["simulation"]["initial_labor_pool"]
-    research_stock = config["simulation"]["initial_research_stock"]
+    # Check if model_experiment_compute mode is enabled (forecaster can override)
+    model_experiment_compute = forecaster_config.get("model_experiment_compute", config["simulation"].get("model_experiment_compute", False))
+
+    if model_experiment_compute:
+        # Use experiment compute mode initial values (different defaults than normal mode)
+        labor_pool = forecaster_config.get("initial_labor_pool", 2000)
+        research_stock = forecaster_config.get("initial_research_stock", 1600)
+        experiment_compute = forecaster_config.get("initial_experiment_compute", config["simulation"].get("initial_experiment_compute", 120325))
+        experiment_compute_power = forecaster_config.get("experiment_compute_power", config["simulation"].get("experiment_compute_power", 0.45))
+        experiment_compute_base_growth = forecaster_config.get("experiment_compute_base_growth", config["simulation"].get("experiment_compute_base_growth", 4.5))
+    else:
+        labor_pool = config["simulation"]["initial_labor_pool"]
+        research_stock = config["simulation"]["initial_research_stock"]
     labor_power = config["simulation"]["labor_power"]
 
     # Track growth dynamics
@@ -372,11 +395,23 @@ def run_median_trajectory_with_growth_dynamics(
         new_labor = labor_pool * daily_growth_rate
         labor_pool += new_labor
 
-        # Calculate research contribution (actual, with software multiplier) - per timestep
-        research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * software_prog_multiplier) / (250 / dt)
+        # Update experiment compute if in model_experiment_compute mode
+        if model_experiment_compute:
+            # Get compute rate for current time using compute schedule
+            compute_rate = get_compute_rate(time, forecaster_config["compute_schedule"])
+            # Experiment compute grows at base_growth^compute_rate per year
+            # Convert to daily growth rate
+            daily_experiment_compute_growth = (experiment_compute_base_growth ** compute_rate) ** (dt / 250) - 1
+            experiment_compute *= (1 + daily_experiment_compute_growth)
 
-        # Calculate human-only research contribution (as if software_prog_multiplier were 1) - per timestep
-        human_only_research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * 1.0) / (250 / dt)
+            # Calculate research contribution: experiment_compute^0.45 * labor^0.3
+            research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (250 / dt)
+            human_only_research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * 1.0) / (250 / dt)
+        else:
+            # Calculate research contribution (actual, with software multiplier) - per timestep
+            research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * software_prog_multiplier) / (250 / dt)
+            # Calculate human-only research contribution (as if software_prog_multiplier were 1) - per timestep
+            human_only_research_contribution = ((((labor_pool + 1) ** labor_power) - 1) * 1.0) / (250 / dt)
 
         # Annualize research contributions (250 working days per year)
         research_contribution_annualized = research_contribution * (250 / dt)
@@ -647,7 +682,11 @@ def plot_software_multiplier_vs_progress(
 
     if model_start_mult <= 1.0 or model_sc_mult <= model_start_mult:
         # Fall back to linear normalization if we can't use log formula
-        model_mult_normalized = [(m - 1) / (model_sc_mult - 1) for m in software_mult]
+        if model_sc_mult <= 1.0:
+            # No meaningful automation, just use zeros
+            model_mult_normalized = [0.0 for _ in software_mult]
+        else:
+            model_mult_normalized = [(m - 1) / (model_sc_mult - 1) for m in software_mult]
     else:
         log_denom = np.log((model_sc_mult - 1) / (model_start_mult - 1))
         model_mult_normalized = [
@@ -1280,11 +1319,15 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
 
     max_time = simulation_config["max_time"]
     baseline_growths = []
+
+    # Check if model_experiment_compute mode is enabled (forecaster can override)
+    model_experiment_compute = forecaster_config.get("model_experiment_compute", simulation_config.get("model_experiment_compute", False))
+
     # Run simulation for each sample with progress bar
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
         time = current_year - samples["announcement_delay"][i]/12
         progress = 0.0
-        
+
         # Initialize trajectory list for this simulation
         trajectory = []
         # Initialize progress multiplier tracking list
@@ -1296,18 +1339,26 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             trajectories.append(trajectory)
             prog_multiplier_trajectories.append(prog_multiplier_trajectory)
             continue
-        
+
         # Initialize labor-based research variables
-        labor_pool = simulation_config["initial_labor_pool"]
-        research_stock = simulation_config["initial_research_stock"]
+        if model_experiment_compute:
+            # Use experiment compute mode initial values (different defaults than normal mode)
+            labor_pool = forecaster_config.get("initial_labor_pool", 2000)
+            research_stock = forecaster_config.get("initial_research_stock", 1600)
+            experiment_compute = forecaster_config.get("initial_experiment_compute", simulation_config.get("initial_experiment_compute", 120325))
+            experiment_compute_power = forecaster_config.get("experiment_compute_power", simulation_config.get("experiment_compute_power", 0.45))
+            experiment_compute_base_growth = forecaster_config.get("experiment_compute_base_growth", simulation_config.get("experiment_compute_base_growth", 4.5))
+        else:
+            labor_pool = simulation_config["initial_labor_pool"]
+            research_stock = simulation_config["initial_research_stock"]
         labor_power = simulation_config["labor_power"]
-        
+
         # Track previous labor growth rate to detect changes
         prev_labor_growth_rate = None
-        
+
         # Counter for iteration tracking
         iteration_count = 0
-        
+
         while progress < base_time_in_months[i] and time < max_time:
 
             # Calculate progress fraction
@@ -1340,9 +1391,21 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             # Calculate new labor added this period
             new_labor = labor_pool * daily_growth_rate
             labor_pool += new_labor
-            
-            # Calculate research contribution on a yearly basis, then divide
-            research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
+
+            # Update experiment compute and calculate research contribution
+            if model_experiment_compute:
+                # Get compute rate for current time using compute schedule
+                compute_rate_for_experiment = get_compute_rate(time, forecaster_config["compute_schedule"])
+                # Experiment compute grows at base_growth^compute_rate per year
+                # Convert to daily growth rate
+                daily_experiment_compute_growth = (experiment_compute_base_growth ** compute_rate_for_experiment) ** (dt / 250) - 1
+                experiment_compute *= (1 + daily_experiment_compute_growth)
+
+                # Calculate research contribution: experiment_compute^0.45 * labor^0.3
+                research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (250/dt)
+            else:
+                # Calculate research contribution on a yearly basis, then divide
+                research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
             # Add to research stock
             new_research_stock = research_stock + research_contribution
             # Calculate actual growth rate (annualized)
@@ -1571,6 +1634,9 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
     min_progress = - backcast_years * 12
     software_progress_share = samples["initial_software_progress_share"]
 
+    # Check if model_experiment_compute mode is enabled (forecaster can override)
+    model_experiment_compute = forecaster_config.get("model_experiment_compute", simulation_config.get("model_experiment_compute", False))
+
     # Run simulation for each sample with progress bar
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
         time = current_year - samples["announcement_delay"][i]/12
@@ -1583,8 +1649,16 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             continue
 
         # Initialize labor-based research variables
-        labor_pool = simulation_config["initial_labor_pool"]
-        research_stock = simulation_config["initial_research_stock"]
+        if model_experiment_compute:
+            # Use experiment compute mode initial values (different defaults than normal mode)
+            labor_pool = forecaster_config.get("initial_labor_pool", 2000)
+            research_stock = forecaster_config.get("initial_research_stock", 1600)
+            experiment_compute = forecaster_config.get("initial_experiment_compute", simulation_config.get("initial_experiment_compute", 120325))
+            experiment_compute_power = forecaster_config.get("experiment_compute_power", simulation_config.get("experiment_compute_power", 0.45))
+            experiment_compute_base_growth = forecaster_config.get("experiment_compute_base_growth", simulation_config.get("experiment_compute_base_growth", 4.5))
+        else:
+            labor_pool = simulation_config["initial_labor_pool"]
+            research_stock = simulation_config["initial_research_stock"]
         labor_power = simulation_config["labor_power"]
 
         # Track previous labor growth rate to detect changes
@@ -1625,8 +1699,21 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             # Calculate new labor added this period
             new_labor = labor_pool * daily_growth_rate
             labor_pool += new_labor
-            # Calculate research contribution on a yearly basis, then divide
-            research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
+
+            # Update experiment compute and calculate research contribution
+            if model_experiment_compute:
+                # Get compute rate for current time using compute schedule (backcast uses rate of 1)
+                compute_rate_for_experiment = 1  # Use constant rate for backcasting
+                # Experiment compute grows at base_growth^compute_rate per year
+                # Convert to daily growth rate (note: dt is negative for backcast)
+                daily_experiment_compute_growth = (experiment_compute_base_growth ** compute_rate_for_experiment) ** (dt / 250) - 1
+                experiment_compute *= (1 + daily_experiment_compute_growth)
+
+                # Calculate research contribution: experiment_compute^0.45 * labor^0.3
+                research_contribution = (((experiment_compute ** experiment_compute_power) * ((labor_pool + 1) ** labor_power)) * software_prog_multiplier) / (250/dt)
+            else:
+                # Calculate research contribution on a yearly basis, then divide
+                research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
             # Add to research stock
             new_research_stock = research_stock + research_contribution
             # print(f"new_research_stock: {new_research_stock}")
