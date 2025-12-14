@@ -313,11 +313,11 @@ def run_median_trajectory_with_growth_dynamics(
     # Get median samples
     median_samples = get_median_samples(forecaster_config)
 
-    # Get simulation parameters
-    current_horizon = config["simulation"]["current_horizon"]
+    # Get simulation parameters (forecaster can override current_horizon and start_year)
+    current_horizon = forecaster_config.get("current_horizon", config["simulation"]["current_horizon"])
     dt = config["simulation"]["dt"]
     max_time = config["simulation"]["max_time"]
-    start_year = config["simulation"]["start_year"]
+    start_year = forecaster_config.get("start_year", config["simulation"]["start_year"])
 
     # Calculate base time and horizon mappings
     base_time_in_months, horizon_mappings = calculate_base_time(median_samples, current_horizon)
@@ -836,8 +836,8 @@ def run_median_trajectory(config: dict, forecaster_config: dict, forecaster_name
     else:
         lines.append(f"  growth_type: Exponential")
 
-    # Run simulation
-    current_horizon = config["simulation"]["current_horizon"]
+    # Run simulation (forecaster can override current_horizon)
+    current_horizon = forecaster_config.get("current_horizon", config["simulation"]["current_horizon"])
     dt = config["simulation"]["dt"]
     human_alg_progress_decrease_date = config["simulation"]["human_alg_progress_decrease_date"]
     max_simulation_years = config["simulation"]["max_simulation_years"]
@@ -1271,13 +1271,13 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
     # Store progress multiplier trajectories for each simulation
     prog_multiplier_trajectories = []
 
-    # Get current date as decimal year
+    # Get current date as decimal year (forecaster can override start_year)
     # current_date = datetime.now()
     # current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
-    current_year = simulation_config["start_year"]
+    current_year = forecaster_config.get("start_year", simulation_config["start_year"])
     # Convert dt from days to months
     dt_in_months = dt / 30.5
-    
+
     max_time = simulation_config["max_time"]
     baseline_growths = []
     # Run simulation for each sample with progress bar
@@ -2165,10 +2165,11 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             samples = get_distribution_samples(forecaster_config, config["simulation"]["n_sims"])
             all_forecaster_samples[name] = samples
             
-            # Calculate time to SC
+            # Calculate time to SC (forecaster can override current_horizon)
+            forecaster_current_horizon = forecaster_config.get("current_horizon", config["simulation"]["current_horizon"])
             all_forecaster_results[name], all_forecaster_trajectories[name], all_forecaster_baseline_growths[name], _ = calculate_sc_arrival_year_with_trajectories(
                 samples,
-                config["simulation"]["current_horizon"],
+                forecaster_current_horizon,
                 config["simulation"]["dt"],
                 config["simulation"]["human_alg_progress_decrease_date"],
                 config["simulation"]["max_simulation_years"],
@@ -2180,7 +2181,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             print(f"Generating backcasted trajectories for {name}...")
             backcast_trajectories_result = backcast_trajectories(
                 samples,
-                config["simulation"]["current_horizon"],
+                forecaster_current_horizon,
                 config["simulation"]["dt"],
                 backcast_years=5,
                 forecaster_config=forecaster_config,
@@ -2354,7 +2355,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
             )
 
             # Combined trajectory plots filtered by SC month
-            fig_combined_month, central_path = plot_combined_trajectories_sc_month(
+            fig_combined_month, all_trajectories = plot_combined_trajectories_sc_month(
                 all_forecaster_backcast_trajectories,
                 all_forecaster_trajectories,
                 all_forecaster_samples,
@@ -2364,6 +2365,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                 color_by_growth_type=True,
                 forecaster_filter=[forecaster_name],
             )
+
+            # Extract central_incl_backcast as the primary central trajectory for backward compatibility
+            central_path = all_trajectories.get('central_incl_backcast')
 
             # Store central trajectory if available
             if central_path is not None:
@@ -2415,17 +2419,43 @@ def run_simple_sc_simulation(config_path: str = "simple_params_may.yaml") -> tup
                 bbox_inches="tight",
             )
 
-            # Save central trajectory data as CSV and collect parameters
+            # Save all trajectory data as CSV (all 3 central trajectories + median) and collect parameters
+            if all_trajectories:
+                # Find the common time grid from median (most complete)
+                median_traj = all_trajectories.get('median')
+                if median_traj is not None:
+                    times = median_traj['times']
+                    csv_data = {'calendar_time': times}
+
+                    # Add median trajectory
+                    csv_data['median_time_horizon_minutes'] = median_traj['horizons']
+
+                    # Add central trajectories (interpolated to common time grid)
+                    for key, label in [
+                        ('central_incl_backcast', 'central_incl_backcast'),
+                        ('central_forecast_only', 'central_forecast_only'),
+                        ('central_zscore', 'central_zscore'),
+                    ]:
+                        traj = all_trajectories.get(key)
+                        if traj is not None:
+                            # Interpolate to common time grid
+                            interp_horizons = np.interp(
+                                times,
+                                traj['times'],
+                                traj['horizons'],
+                                left=np.nan,
+                                right=np.nan,
+                            )
+                            csv_data[f'{label}_time_horizon_minutes'] = interp_horizons
+
+                    central_df = pd.DataFrame(csv_data)
+                    central_df.to_csv(
+                        combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
+                        index=False,
+                    )
+
+            # Collect parameters for summary CSV (from central_incl_backcast)
             if central_path is not None:
-                central_df = pd.DataFrame({
-                    'calendar_time': central_path['times'],
-                    'time_horizon_minutes': central_path['horizons'],
-                })
-                central_df.to_csv(
-                    combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
-                    index=False,
-                )
-                # Collect parameters for summary CSV
                 all_central_params.append({
                     'forecaster': forecaster_name,
                     'sc_month': sc_month_str,

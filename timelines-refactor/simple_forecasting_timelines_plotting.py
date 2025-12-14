@@ -574,7 +574,7 @@ def plot_combined_trajectories_sc_month(
     color_by_growth_type: bool = True,
     overlay_external_data: bool = True,
     plot_central_trajectory: bool = True,
-    plot_median_curve: bool = False,
+    plot_median_curve: bool = True,
     overlay_illustrative_trend: bool = False,
     add_agent_checkpoints: bool = False,
     forecaster_filter: list[str] = None,
@@ -784,7 +784,7 @@ def plot_combined_trajectories_sc_month(
             distances_old = np.nanmean(np.abs(matrix_truncated_old - median_truncated_old), axis=1)
             best_idx_old = np.nanargmin(distances_old)
             best_path_old = all_combined_paths[int(best_idx_old)]
-            ax.plot(best_path_old['times'], best_path_old['horizons'], color='gray', linewidth=2, linestyle='--', label='Central Trajectory (forecast only)', zorder=47)
+            ax.plot(best_path_old['times'], best_path_old['horizons'], color='purple', linewidth=2, linestyle='--', label='Central Trajectory (forecast only)', zorder=47)
 
             # Method 2: New method - distances from 2021.0 (backcast start) up to the end of the SC month filter
             time_mask = (x_grid >= 2021.0) & (x_grid <= month_end)
@@ -923,8 +923,10 @@ def plot_combined_trajectories_sc_month(
     else:
         legend_elements.append(Line2D([0], [0], color='gray', linewidth=2, label='Combined Trajectories'))
 
-    # Add Central Trajectory after growth types
-    legend_elements.append(Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Central Trajectory'))
+    # Add Central Trajectories after growth types (3 methods)
+    legend_elements.append(Line2D([0], [0], color='purple', linewidth=2, linestyle='--', label='Central (forecast only)'))
+    legend_elements.append(Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Central (incl. backcast)'))
+    legend_elements.append(Line2D([0], [0], color='blue', linewidth=2, linestyle='--', label='Central (z-score)'))
 
     if plot_median_curve:
         legend_elements.append(Line2D([0], [0], color='red', linewidth=2, linestyle=':', label='Median'))
@@ -941,16 +943,309 @@ def plot_combined_trajectories_sc_month(
         tick.set_rotation(45)
 
     # -----------------------------------------------------------------
-    # Prepare return value for central trajectory so caller can compare
+    # Prepare return value for all trajectories so caller can compare
     # -----------------------------------------------------------------
-    central_traj: dict | None = None
+    all_trajectories: dict = {}
     try:
-        central_traj = best_path  # may raise if best_path undefined
+        all_trajectories['central_incl_backcast'] = best_path
     except Exception:
-        central_traj = None
+        pass
+    try:
+        all_trajectories['central_forecast_only'] = best_path_old
+    except Exception:
+        pass
+    try:
+        all_trajectories['central_zscore'] = best_path_zscore
+    except Exception:
+        pass
+    try:
+        if valid.any():
+            all_trajectories['median'] = {
+                'times': x_grid[valid],
+                'horizons': 10**median_curve[valid],
+            }
+    except Exception:
+        pass
 
     add_disclaimer(fig)
-    return fig, central_traj
+    return fig, all_trajectories
+
+
+def plot_central_only_trajectories_sc_month(
+    all_forecaster_backcast_trajectories: dict,
+    all_forecaster_trajectories: dict,
+    all_forecaster_samples: dict,
+    all_forecaster_results: dict,
+    config: dict,
+    *,
+    sc_month_str: str = "March 2027",
+    color_by_growth_type: bool = True,
+    overlay_external_data: bool = True,
+    overlay_illustrative_trend: bool = False,
+    forecaster_filter: list[str] = None,
+    jsonl_dir: str | Path = None,
+) -> tuple[plt.Figure, dict|None]:
+    """
+    Simplified version of `plot_combined_trajectories_sc_month` that only shows:
+    - The individual trajectories (colored by growth type)
+    - The Central (incl. backcast) curve (black dashed)
+    - No median, no forecast-only central, no z-score central
+    """
+
+    # If jsonl_dir is provided, load trajectories from JSONL files
+    if jsonl_dir is not None:
+        (all_forecaster_backcast_trajectories,
+         all_forecaster_trajectories,
+         all_forecaster_samples,
+         all_forecaster_results) = load_trajectories_from_jsonl(jsonl_dir)
+
+    month_start, month_end, month_mid = _parse_month_year(sc_month_str)
+
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig = plt.figure(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+
+    current_year = 2025.25
+    backcast_years = 5
+    forecast_years = max(3, int(np.ceil(month_end - current_year)) + 1)
+    x_min = current_year - backcast_years
+    x_max = current_year + forecast_years
+
+    total_trajectories_plotted = 0
+    all_combined_paths = []
+    best_path = None
+
+    for name in all_forecaster_backcast_trajectories.keys():
+        if forecaster_filter and name not in forecaster_filter:
+            continue
+
+        backcast_traj_list = all_forecaster_backcast_trajectories[name]
+        forecast_traj_list = all_forecaster_trajectories[name]
+        samples = all_forecaster_samples[name]
+        results = all_forecaster_results[name]
+
+        mask = (results >= month_start) & (results < month_end)
+        indices = np.where(mask)[0]
+        if len(indices) == 0:
+            continue
+
+        if color_by_growth_type:
+            growth_colors = {
+                "exponential": "#2E8B57",
+                "superexponential": "#FF6347",
+                "subexponential": "#4169E1",
+            }
+        else:
+            base_name = name.split(" (")[0].lower()
+            forecaster_color = config["forecasters"][base_name]["color"]
+
+        max_plot = min(500, len(indices))
+        for i_idx in range(max_plot):
+            idx = indices[i_idx]
+            back_traj = backcast_traj_list[idx]
+            fore_traj = forecast_traj_list[idx]
+
+            if not fore_traj or len(fore_traj) <= 1:
+                continue
+
+            if color_by_growth_type:
+                if samples["is_exponential"][idx]:
+                    color = growth_colors["exponential"]
+                elif samples["is_superexponential"][idx]:
+                    color = growth_colors["superexponential"]
+                else:
+                    color = growth_colors["subexponential"]
+            else:
+                color = forecaster_color
+
+            if back_traj:
+                bt, bh = zip(*back_traj)
+                ax.plot(bt, bh, '-', color=color, alpha=0.15, linewidth=0.8)
+            if fore_traj:
+                ft, fh = zip(*fore_traj)
+                ax.plot(ft, fh, '-', color=color, alpha=0.15, linewidth=0.8)
+            total_trajectories_plotted += 1
+
+            combined_t = []
+            combined_h = []
+            if back_traj:
+                combined_t.extend(bt)
+                combined_h.extend(bh)
+            if fore_traj:
+                combined_t.extend(ft)
+                combined_h.extend(fh)
+            if combined_t:
+                order = np.argsort(combined_t)
+                all_combined_paths.append({
+                    'times': np.array(combined_t)[order],
+                    'horizons': np.array(combined_h)[order],
+                    'forecaster_name': name,
+                    'sample_idx': idx,
+                })
+
+    print(f"Total {sc_month_str} combined trajectories plotted: {total_trajectories_plotted}")
+
+    # Decoration lines
+    current_horizon = config["simulation"]["current_horizon"]
+    ax.axhline(y=current_horizon, color='gray', linestyle=':', alpha=0.8, linewidth=3)
+    ax.axvline(x=current_year, color='gray', linestyle=':', alpha=0.7, linewidth=2)
+    ax.axvline(x=month_mid, color='purple', linestyle=':', alpha=0.8, linewidth=2)
+
+    # External data overlay
+    if overlay_external_data:
+        external_df = load_external_data()
+        if not external_df.empty:
+            mask = (external_df['release_year_decimal'] >= x_min) & (external_df['release_year_decimal'] <= x_max)
+            visible = external_df[mask]
+            if not visible.empty:
+                ax.scatter(visible['release_year_decimal'], visible['p80'], color='black', s=25, alpha=0.8, zorder=15, marker='o')
+
+    # Title
+    active_forecaster = forecaster_filter[0] if forecaster_filter and len(forecaster_filter) == 1 else None
+    if active_forecaster == "Eli_patched_rd_speedup":
+        plot_title = "Comparing Bug-Fixed Model Trajectories to Graph Curves"
+    else:
+        plot_title = "Comparing Model Trajectories to Graph Curves"
+    plot_subtitle = f"(Filtered for {sc_month_str} SC Arrivals)"
+    ax.set_title(f"{plot_title}\n{plot_subtitle}", fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_ylabel("80% Coding Time Horizon", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_yscale('log')
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Y-axis tick labels
+    ax.autoscale_view()
+    y_min, y_max = ax.get_ylim()
+    min_time_minutes = 0.1 / 60
+    if y_min < min_time_minutes:
+        y_min = min_time_minutes
+    if y_max < 6012000:
+        y_max = 6012000
+    ax.set_ylim(y_min, y_max)
+
+    all_ticks = [
+        (5/60, "5s"),
+        (0.5, "30s"),
+        (3, "3 mins"),
+        (15, "15 mins"),
+        (60, "1 hour"),
+        (480, "1 work day"),
+        (2400, "1 work week"),
+        (10020, "1 work month"),
+        (120240, "1 work year"),
+        (601200, "5 work years"),
+        (6012000, "50 work years"),
+    ]
+
+    valid_ticks = [(pos, label) for pos, label in all_ticks if y_min <= pos <= y_max]
+    if valid_ticks:
+        pos, lab = zip(*valid_ticks)
+        ax.set_yticks(pos)
+        ax.set_yticklabels(lab)
+
+    # Compute and plot ONLY the Central (incl. backcast) trajectory
+    if all_combined_paths:
+        x_grid = np.arange(x_min, x_max + 1e-6, 1/12)
+        matrix = np.full((len(all_combined_paths), len(x_grid)), np.nan)
+        for i, p in enumerate(all_combined_paths):
+            mask = (x_grid >= p['times'][0]) & (x_grid <= p['times'][-1])
+            if mask.any():
+                matrix[i, mask] = np.log10(np.interp(x_grid[mask], p['times'], p['horizons']))
+        median_curve = np.nanmedian(matrix, axis=0)
+        valid = ~np.isnan(median_curve)
+
+        if valid.any():
+            # Method 2: Central (incl. backcast) - distances from 2021.0
+            time_mask = (x_grid >= 2021.0) & (x_grid <= month_end)
+            matrix_truncated = matrix[:, time_mask]
+            median_truncated = median_curve[time_mask]
+            distances = np.nanmean(np.abs(matrix_truncated - median_truncated), axis=1)
+            for i, p in enumerate(all_combined_paths):
+                if p['times'][0] >= 2021.0:
+                    distances[i] = np.inf
+            best_idx = np.nanargmin(distances)
+            best_path = all_combined_paths[int(best_idx)]
+            ax.plot(best_path['times'], best_path['horizons'], color='black', linewidth=2, linestyle='--', zorder=48)
+
+    # Overlay illustrative SE trends if requested
+    if overlay_illustrative_trend:
+        script_dir = Path(__file__).resolve().parent
+        external_dir = script_dir.parent / "external"
+
+        original_trend_path = external_dir / "original_graph_trend_generated.csv"
+        if original_trend_path.exists():
+            try:
+                original_df = pd.read_csv(original_trend_path)
+                mask = (original_df['year'] >= x_min) & (original_df['year'] <= x_max)
+                if mask.any():
+                    ax.plot(original_df.loc[mask, 'year'], original_df.loc[mask, 'horizon_minutes'],
+                            color='green', linewidth=2, linestyle='--')
+            except Exception as e:
+                print(f"Warning: failed to plot original illustrative trend: {e}")
+
+        fixed_trend_path = external_dir / "fixed_illustrative_graph_trend.csv"
+        if fixed_trend_path.exists():
+            try:
+                fixed_df = pd.read_csv(fixed_trend_path)
+                mask = (fixed_df['year'] >= x_min) & (fixed_df['year'] <= x_max)
+                if mask.any():
+                    ax.plot(fixed_df.loc[mask, 'year'], fixed_df.loc[mask, 'horizon_minutes'],
+                            color='blue', linewidth=2, linestyle='--')
+            except Exception as e:
+                print(f"Warning: failed to plot fixed illustrative trend: {e}")
+
+    # Legend - simplified with only relevant items
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='purple', linestyle=':', linewidth=2, label=f'{sc_month_str} (SC Arrival)'),
+    ]
+
+    if overlay_external_data:
+        external_df = load_external_data()
+        if not external_df.empty:
+            mask2 = (external_df['release_year_decimal'] >= x_min) & (external_df['release_year_decimal'] <= x_max)
+            if external_df[mask2].shape[0] > 0:
+                legend_elements.append(Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=4, label='METR 80% time horizons', linestyle='None'))
+
+    if color_by_growth_type:
+        legend_elements.extend([
+            Line2D([0], [0], color='#2E8B57', linewidth=2, alpha=0.15, label='Exponential Growth Trajectories'),
+            Line2D([0], [0], color='#FF6347', linewidth=2, alpha=0.15, label='Superexponential Growth Trajectories'),
+            Line2D([0], [0], color='#4169E1', linewidth=2, alpha=0.15, label='Subexponential Growth Trajectories')
+        ])
+    else:
+        legend_elements.append(Line2D([0], [0], color='gray', linewidth=2, label='Combined Trajectories'))
+
+    # Only add the Central (incl. backcast) to legend
+    legend_elements.append(Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Central (incl. backcast)'))
+
+    if overlay_illustrative_trend:
+        legend_elements.append(Line2D([0], [0], color='green', linewidth=2, linestyle='--', label='Original illustrative graph curve'))
+        legend_elements.append(Line2D([0], [0], color='blue', linewidth=2, linestyle='--', label='Intended illustrative graph curve'))
+
+    legend = ax.legend(handles=legend_elements, fontsize=config["plotting_style"]["font"]["sizes"]["legend"], framealpha=0.5)
+    legend.set_zorder(50)
+
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    all_trajectories: dict = {}
+    if best_path is not None:
+        all_trajectories['central_incl_backcast'] = best_path
+
+    add_disclaimer(fig)
+    return fig, all_trajectories
+
 
 # -----------------------------------------------------------------------------
 # Compatibility wrappers for legacy function names (March 2027 specific)
@@ -983,7 +1278,7 @@ def plot_combined_trajectories_march_2027(
     color_by_growth_type: bool = True,
     overlay_external_data: bool = True,
     plot_central_trajectory: bool = True,
-    plot_median_curve: bool = False,
+    plot_median_curve: bool = True,
     overlay_illustrative_trend: bool = False,
     add_agent_checkpoints: bool = False,
     forecaster_filter: list[str] = None,
@@ -1246,7 +1541,7 @@ def plot_combined_trajectories(
     color_by_growth_type: bool = True,
     overlay_external_data: bool = True,
     plot_central_trajectory: bool = True,
-    plot_median_curve: bool = False,
+    plot_median_curve: bool = True,
     add_agent_checkpoints: bool = False,
     forecaster_filter: list[str] = None,
     jsonl_dir: str | Path = None,
@@ -1483,7 +1778,7 @@ def plot_combined_trajectories(
             distances_old = np.nanmean(np.abs(matrix_truncated_old - median_truncated_old), axis=1)
             best_idx_old = np.nanargmin(distances_old)
             best_path_old = all_combined_paths[int(best_idx_old)]
-            ax.plot(best_path_old['times'], best_path_old['horizons'], color='gray', linewidth=2, linestyle='--', label='Central Trajectory (forecast only)', zorder=47)
+            ax.plot(best_path_old['times'], best_path_old['horizons'], color='purple', linewidth=2, linestyle='--', label='Central Trajectory (forecast only)', zorder=47)
 
             # Method 2: New method - distances from 2021.0 (backcast start)
             time_mask = x_grid >= 2021.0

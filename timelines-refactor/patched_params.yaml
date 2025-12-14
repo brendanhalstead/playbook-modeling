@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 5000   # Number of Monte Carlo simulation runs
+  n_sims: 10000   # Number of Monte Carlo simulation runs
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
@@ -43,20 +43,20 @@ forecasters:
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
       patch_rd_speedup: True
-  # eli_exp_only_patched_rd_speedup:
-  #   name: "Eli_exp_only_patched_rd_speedup"
-  #   color: "#003000"
-  #   parent: "eli_patched_rd_speedup"
-  #   distributions:
-  #     p_superexponential: 0.0
-  #     p_subexponential: 0.0
-  # eli_superexp_only_patched_rd_speedup:
-  #   name: "Eli_superexp_only_patched_rd_speedup"
-  #   color: "#0000AA"
-  #   parent: "eli_patched_rd_speedup"
-  #   distributions:
-  #     p_superexponential: 1.0
-  #     p_subexponential: 0.0
+  eli_exp_only_patched_rd_speedup:
+    name: "Eli_exp_only_patched_rd_speedup"
+    color: "#003000"
+    parent: "eli_patched_rd_speedup"
+    distributions:
+      p_superexponential: 0.0
+      p_subexponential: 0.0
+  eli_superexp_only_patched_rd_speedup:
+    name: "Eli_superexp_only_patched_rd_speedup"
+    color: "#0000AA"
+    parent: "eli_patched_rd_speedup"
+    distributions:
+      p_superexponential: 1.0
+      p_subexponential: 0.0
   # eli_narrow_exp:
   #   name: "Eli_narrow_exp"
   #   color: "#0000AA"

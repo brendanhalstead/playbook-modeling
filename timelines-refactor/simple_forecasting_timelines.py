@@ -1011,7 +1011,8 @@ def save_trajectories_jsonl(
     all_forecaster_backcast_trajectories: dict,
     all_forecaster_samples: dict,
     all_forecaster_results: dict,
-    output_dir: Path
+    output_dir: Path,
+    downsample_step: int = 10
 ) -> None:
     """Save all time->horizon trajectories to JSONL files for post-run analysis.
 
@@ -1020,8 +1021,13 @@ def save_trajectories_jsonl(
     - sc_arrival_year: SC arrival year for this simulation
     - growth_type: 'exponential', 'superexponential', or 'subexponential'
     - parameters: Dict of sample parameters for this simulation
-    - forward_trajectory: List of [time, horizon_minutes] points
-    - backcast_trajectory: List of [time, horizon_minutes] points
+    - forward_trajectory: List of [time, horizon_minutes] points (downsampled)
+    - backcast_trajectory: List of [time, horizon_minutes] points (downsampled)
+
+    Parameters
+    ----------
+    downsample_step : int
+        Save every Nth point to reduce file size. Default 10 reduces ~2200 points to ~220.
     """
     trajectories_dir = output_dir / "trajectories_jsonl"
     trajectories_dir.mkdir(exist_ok=True)
@@ -1031,21 +1037,33 @@ def save_trajectories_jsonl(
         backcast_trajectories = all_forecaster_backcast_trajectories[forecaster_name]
         samples = all_forecaster_samples[forecaster_name]
         results = all_forecaster_results[forecaster_name]
+        n_trajectories = len(forward_trajectories)
 
-        jsonl_path = trajectories_dir / f"{forecaster_name}_trajectories.jsonl"
+        # Pre-compute growth types as array for faster lookup
+        growth_types = np.where(
+            samples["is_exponential"], "exponential",
+            np.where(samples["is_superexponential"], "superexponential", "subexponential")
+        )
 
-        with open(jsonl_path, 'w') as f:
-            for i in range(len(forward_trajectories)):
-                # Determine growth type
-                if samples["is_exponential"][i]:
-                    growth_type = "exponential"
-                elif samples["is_superexponential"][i]:
-                    growth_type = "superexponential"
-                else:
-                    growth_type = "subexponential"
+        # Build all records in memory first, then write in batch
+        records = []
+        for i in range(n_trajectories):
+            # Downsample trajectories, always keeping first and last points
+            fwd = forward_trajectories[i]
+            bck = backcast_trajectories[i]
+            fwd_downsampled = fwd[::downsample_step] if len(fwd) > downsample_step else fwd
+            bck_downsampled = bck[::downsample_step] if len(bck) > downsample_step else bck
+            # Ensure last point is included
+            if len(fwd) > 1 and fwd[-1] != fwd_downsampled[-1]:
+                fwd_downsampled = list(fwd_downsampled) + [fwd[-1]]
+            if len(bck) > 1 and bck[-1] != bck_downsampled[-1]:
+                bck_downsampled = list(bck_downsampled) + [bck[-1]]
 
-                # Build parameters dict (convert numpy types to Python types)
-                params = {
+            record = {
+                "sample_idx": i,
+                "sc_arrival_year": float(results[i]),
+                "growth_type": str(growth_types[i]),
+                "parameters": {
                     "h_SC": float(samples["h_SC"][i]),
                     "T_t": float(samples["T_t"][i]),
                     "cost_speed": float(samples["cost_speed"][i]),
@@ -1054,21 +1072,17 @@ def save_trajectories_jsonl(
                     "SC_prog_multiplier": float(samples["SC_prog_multiplier"][i]),
                     "patch_rd_speedup": bool(samples["patch_rd_speedup"][i]),
                     "software_progress_share": float(samples["software_progress_share"][i]),
-                }
+                },
+                "forward_trajectory": fwd_downsampled,
+                "backcast_trajectory": bck_downsampled,
+            }
+            records.append(json.dumps(record, default=float))
 
-                # Build the record
-                record = {
-                    "sample_idx": i,
-                    "sc_arrival_year": float(results[i]),
-                    "growth_type": growth_type,
-                    "parameters": params,
-                    "forward_trajectory": [[float(t), float(h)] for t, h in forward_trajectories[i]],
-                    "backcast_trajectory": [[float(t), float(h)] for t, h in backcast_trajectories[i]],
-                }
+        jsonl_path = trajectories_dir / f"{forecaster_name}_trajectories.jsonl"
+        with open(jsonl_path, 'w') as f:
+            f.write('\n'.join(records))
 
-                f.write(json.dumps(record) + '\n')
-
-        print(f"Saved {len(forward_trajectories)} trajectories to {jsonl_path}")
+        print(f"Saved {n_trajectories} trajectories to {jsonl_path}")
 
     print(f"\nAll trajectory JSONL files saved to {trajectories_dir}")
 
@@ -1423,7 +1437,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
                 )
 
             # Combined trajectory plots filtered by SC month
-            fig_combined_month, central_path = plot_combined_trajectories_sc_month(
+            fig_combined_month, all_trajectories = plot_combined_trajectories_sc_month(
                 all_forecaster_backcast_trajectories,
                 all_forecaster_trajectories,
                 all_forecaster_samples,
@@ -1433,6 +1447,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
                 color_by_growth_type=True,
                 forecaster_filter=[forecaster_name],
             )
+
+            # Extract central_incl_backcast as the primary central trajectory for backward compatibility
+            central_path = all_trajectories.get('central_incl_backcast')
 
             # Store central trajectory if available
             if central_path is not None:
@@ -1463,6 +1480,18 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
                 forecaster_filter=[forecaster_name],
             )
 
+            # Central-only plot (simplified: only Central incl. backcast curve)
+            fig_central_only, _ = plot_central_only_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
+                forecaster_filter=[forecaster_name],
+            )
+
             # --- Save the month-specific figures ---
             if not minimal:
                 fig_trajectories.savefig(
@@ -1481,17 +1510,46 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
                 dpi=300,
                 bbox_inches="tight",
             )
+            fig_central_only.savefig(
+                combined_dir / f"combined_trajectories_{month_slug}_central_only_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
 
-            # Save central trajectory data as CSV
-            if central_path is not None:
-                central_df = pd.DataFrame({
-                    'calendar_time': central_path['times'],
-                    'time_horizon_minutes': central_path['horizons'],
-                })
-                central_df.to_csv(
-                    combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
-                    index=False,
-                )
+            # Save all trajectory data as CSV (all 3 central trajectories + median)
+            if all_trajectories:
+                # Find the common time grid from median (most complete)
+                median_traj = all_trajectories.get('median')
+                if median_traj is not None:
+                    times = median_traj['times']
+                    csv_data = {'calendar_time': times}
+
+                    # Add median trajectory
+                    csv_data['median_time_horizon_minutes'] = median_traj['horizons']
+
+                    # Add central trajectories (interpolated to common time grid)
+                    for key, label in [
+                        ('central_incl_backcast', 'central_incl_backcast'),
+                        ('central_forecast_only', 'central_forecast_only'),
+                        ('central_zscore', 'central_zscore'),
+                    ]:
+                        traj = all_trajectories.get(key)
+                        if traj is not None:
+                            # Interpolate to common time grid
+                            interp_horizons = np.interp(
+                                times,
+                                traj['times'],
+                                traj['horizons'],
+                                left=np.nan,
+                                right=np.nan,
+                            )
+                            csv_data[f'{label}_time_horizon_minutes'] = interp_horizons
+
+                    central_df = pd.DataFrame(csv_data)
+                    central_df.to_csv(
+                        combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
+                        index=False,
+                    )
 
             # Close month-specific figures to free memory
             if not minimal:
@@ -1499,6 +1557,7 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml", minimal: b
                 plt.close(fig_combined_month_median)
             plt.close(fig_combined_month)
             plt.close(fig_combined_month_illustrative)
+            plt.close(fig_central_only)
 
         monthly_central_trajectories_by_forecaster[forecaster_name] = central_trajs_by_month
 
@@ -1970,7 +2029,7 @@ def regenerate_plots(output_dir: str | Path):
                 forecaster_filter=[forecaster_name],
             )
 
-            fig_combined_month, central_path = plot_combined_trajectories_sc_month(
+            fig_combined_month, all_trajectories = plot_combined_trajectories_sc_month(
                 all_forecaster_backcast_trajectories,
                 all_forecaster_trajectories,
                 all_forecaster_samples,
@@ -1980,6 +2039,9 @@ def regenerate_plots(output_dir: str | Path):
                 color_by_growth_type=True,
                 forecaster_filter=[forecaster_name],
             )
+
+            # Extract central_incl_backcast as the primary central trajectory for backward compatibility
+            central_path = all_trajectories.get('central_incl_backcast')
 
             if central_path is not None:
                 central_trajs_by_month[sc_month_str] = central_path
@@ -2005,6 +2067,18 @@ def regenerate_plots(output_dir: str | Path):
                 sc_month_str=sc_month_str,
                 color_by_growth_type=True,
                 overlay_illustrative_trend=True,
+                forecaster_filter=[forecaster_name],
+            )
+
+            # Central-only plot (simplified: only Central incl. backcast curve)
+            fig_central_only, _ = plot_central_only_trajectories_sc_month(
+                all_forecaster_backcast_trajectories,
+                all_forecaster_trajectories,
+                all_forecaster_samples,
+                all_forecaster_results,
+                config,
+                sc_month_str=sc_month_str,
+                color_by_growth_type=True,
                 forecaster_filter=[forecaster_name],
             )
 
@@ -2034,22 +2108,52 @@ def regenerate_plots(output_dir: str | Path):
                 dpi=300,
                 bbox_inches="tight",
             )
+            fig_central_only.savefig(
+                combined_dir / f"combined_trajectories_{month_slug}_central_only_{forecaster_name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
 
-            # Save central trajectory data as CSV
-            if central_path is not None:
-                central_df = pd.DataFrame({
-                    'calendar_time': central_path['times'],
-                    'time_horizon_minutes': central_path['horizons'],
-                })
-                central_df.to_csv(
-                    combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
-                    index=False,
-                )
+            # Save all trajectory data as CSV (all 3 central trajectories + median)
+            if all_trajectories:
+                # Find the common time grid from median (most complete)
+                median_traj = all_trajectories.get('median')
+                if median_traj is not None:
+                    times = median_traj['times']
+                    csv_data = {'calendar_time': times}
+
+                    # Add median trajectory
+                    csv_data['median_time_horizon_minutes'] = median_traj['horizons']
+
+                    # Add central trajectories (interpolated to common time grid)
+                    for key, label in [
+                        ('central_incl_backcast', 'central_incl_backcast'),
+                        ('central_forecast_only', 'central_forecast_only'),
+                        ('central_zscore', 'central_zscore'),
+                    ]:
+                        traj = all_trajectories.get(key)
+                        if traj is not None:
+                            # Interpolate to common time grid
+                            interp_horizons = np.interp(
+                                times,
+                                traj['times'],
+                                traj['horizons'],
+                                left=np.nan,
+                                right=np.nan,
+                            )
+                            csv_data[f'{label}_time_horizon_minutes'] = interp_horizons
+
+                    central_df = pd.DataFrame(csv_data)
+                    central_df.to_csv(
+                        combined_dir / f"combined_trajectories_{month_slug}_illustrative_{forecaster_name}_central_trajectory.csv",
+                        index=False,
+                    )
 
             plt.close(fig_trajectories)
             plt.close(fig_combined_month)
             plt.close(fig_combined_month_median)
             plt.close(fig_combined_month_illustrative)
+            plt.close(fig_central_only)
 
         monthly_central_trajectories_by_forecaster[forecaster_name] = central_trajs_by_month
 

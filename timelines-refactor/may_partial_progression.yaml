@@ -2,11 +2,11 @@ simulation:
   n_sims: 5     # Number of Monte Carlo simulation runs, set to 5000 for full run
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
-  current_horizon: 26  # Current time horizon in minutes (point estimate)
+  current_horizon: 15  # Current time horizon in minutes (point estimate)
   human_alg_progress_decrease_date: 2029.0  # End of 2028
   max_simulation_years: 20.0  # Maximum number of years to simulate before timeout
   max_time: 2065.0  # Maximum year to simulate to (simulations will be capped at this year)
-  start_year: 2025.6  # Start year for the simulation
+  start_year: 2025.25  # Start year for the simulation
   # Labor-based research parameters (defaults, can be overridden per-forecaster)
   initial_labor_pool: 1000  # Initial size of labor pool (L)
   labor_power: 0.3          # Exponent to translate labor increases to overall research progress (M)
@@ -56,12 +56,15 @@ forecasters:
     parent: "aird_dm_fix"
     color: "#003000"
     initial_software_progress_share_ci: [0.61, 0.61001] # 80% CI for fraction of progress from software (vs compute). 0.5 = equal weighting (original behavior)
+    current_horizon: 26
+    start_year: 2025.6
     distributions:
       horizon_doubling_time_ci: [5.5, 5.50001] # Horizon doubling time in months
       se_doubling_decay_fraction_ci: [0.08, 0.08001] # If superexponential, fraction by which each doubling gets easier
       h_SC_ci: [1200, 1200.0001] # Months needed for SC
       cost_speed_ci: [13, 13.001] # Coding efficiency in months 
-      SC_prog_multiplier_ci: [18.5, 18.501]  # Progress multiplier at SC - 1    
+      SC_prog_multiplier_ci: [18.5, 18.501]  # Progress multiplier at SC - 1
+      present_prog_multiplier_ci: [0.085, 0.0851]  # Progress multiplier at present - 1    
   patched_rd_speedup_only:
     name: "patched_rd_speedup_only"
     parent: "param_estimate_changes"
