@@ -344,24 +344,33 @@ def save_pdf_cdf_csvs(all_forecaster_results: dict, config: dict, output_dir: Pa
 
     Creates a subfolder 'cdf_and_pdf_csvs' in output_dir containing one CSV per forecaster.
     Each CSV contains columns: x, pdf, cdf
+
+    The PDF is scaled to account for simulations that don't complete by 2050,
+    so it integrates to the fraction of simulations that complete (not 1.0).
+    The CDF similarly maxes out at the fraction that complete by 2050.
     """
     csv_dir = output_dir / "cdf_and_pdf_csvs"
     csv_dir.mkdir(exist_ok=True)
 
     for name, results in all_forecaster_results.items():
-        # Filter out >2050 points for PDF (matching plot_results behavior)
-        valid_results = [r for r in results if r <= 2050]
+        # Filter out >=2050 points - simulations that hit max_time are set to exactly 2050
+        # so we use strict inequality to exclude incomplete simulations
+        valid_results = [r for r in results if r < 2050]
 
         if len(valid_results) < 2:
             continue
 
-        # Compute PDF using KDE (same as plot_results)
+        # Compute the fraction of simulations that complete before 2050
+        completion_fraction = len(valid_results) / len(results)
+
+        # Compute PDF using KDE on valid results, then scale by completion fraction
+        # This way the PDF integrates to completion_fraction, not 1.0
         kde = gaussian_kde(valid_results)
         x_range = np.linspace(min(valid_results), max(valid_results), 200)
-        pdf_values = kde(x_range)
+        pdf_values = kde(x_range) * completion_fraction
 
-        # Compute CDF: for each x value, compute the fraction of results <= x
-        # Using all results (not just valid_results) to match plot_results_cdf behavior
+        # Compute CDF: fraction of ALL results <= x
+        # This naturally maxes out at completion_fraction for x near 2050
         sorted_results = np.sort(results)
         cdf_values = np.searchsorted(sorted_results, x_range, side='right') / len(sorted_results)
 

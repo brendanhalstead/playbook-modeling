@@ -53,6 +53,7 @@ forecasters:
     labor_growth_schedule: [[2025, 0.5], [2028, 0.4], [2029, 0.2], [2030, 0.15], [2031, 0.1]]  # List of [year, rate] pairs for annual labor growth
     initial_software_progress_share_ci: [0.5, 0.50001]  # 80% CI for initial software progress share
     patch_rd_speedup: False
+    initial_research_stock: 40
     distributions:
       h_SC_ci: [1, 14400]  # Months needed for SC
       horizon_doubling_time_ci: [2.5, 9]   # Horizon doubling time in months
@@ -101,40 +102,84 @@ forecasters:
     parent: "new_model_interpolation"
     color: "#003000"
     use_calendar_days: True  # Use 365 days/year instead of 250 working days
-  dynamic_initial_research_stock:
-    name: "dynamic_initial_research_stock"
+  # diff_stock_low:
+  #   name: "diff_stock_low"
+  #   parent: "use_calendar_days"
+  #   color: "#003000"
+  #   initial_research_stock: 10
+  # diff_stock_30:
+  #   name: "diff_stock_30"
+  #   parent: "use_calendar_days"
+  #   color: "#003000"
+  #   initial_research_stock: 30
+  # diff_stock_40:
+  #   name: "diff_stock_40"
+  #   parent: "use_calendar_days"
+  #   color: "#003000"
+  #   initial_research_stock: 40
+  # diff_stock_high:
+  #   name: "diff_stock_high"
+  #   parent: "use_calendar_days"
+  #   color: "#003000"
+  #   initial_research_stock: 300
+  # dynamic_initial_research_stock:
+  #   name: "dynamic_initial_research_stock"
+  #   parent: "use_calendar_days"
+  #   color: "#003000"
+  #   use_dynamic_initial_research_stock: True  # initial_research_stock = ((initial_labor_pool^labor_power)^2) * (first_labor_growth_rate * 0.3)
+  # dynamic_initial_research_stock_diff_stock:
+  #   name: "dynamic_initial_research_stock_diff_stock"
+  #   parent: "dynamic_initial_research_stock"
+  #   color: "#003000"
+  #   use_dynamic_initial_research_stock: True  # initial_research_stock = ((initial_labor_pool^labor_power)^2) * (first_labor_growth_rate * 0.3)
+  #   labor_growth_schedule: [[2025, 0.3], [2025.6, 0.5], [2028, 0.4], [2029, 0.2], [2030, 0.15], [2031, 0.1]]  # List of [year, rate] pairs for annual labor growth
+  # input_time_series_without_exp_compute:
+  #   name: "input_time_series_without_exp_compute"
+  #   parent: "diff_stock_30"
+  #   color: "#003000"
+  #   compute_schedule: [[2028, 0.42]]  # List of [year, rate] pairs
+  #   labor_growth_schedule: [[2025, 0.8], [2029, 0.7], [2030, 0.6], [2031, 0.5]]  # List of [year, rate] pairs for annual labor growth
+  labor_input_time_series_with_stock_30:
+    name: "labor_input_time_series_with_stock_30"
     parent: "use_calendar_days"
     color: "#003000"
-    use_dynamic_initial_research_stock: True  # initial_research_stock = ((initial_labor_pool^labor_power)^2) * (first_labor_growth_rate * 0.3)
-  dynamic_initial_research_stock_diff_stock:
-    name: "dynamic_initial_research_stock_diff_stock"
-    parent: "dynamic_initial_research_stock"
-    color: "#003000"
-    use_dynamic_initial_research_stock: True  # initial_research_stock = ((initial_labor_pool^labor_power)^2) * (first_labor_growth_rate * 0.3)
-    labor_growth_schedule: [[2025, 0.3], [2025.6, 0.5], [2028, 0.4], [2029, 0.2], [2030, 0.15], [2031, 0.1]]  # List of [year, rate] pairs for annual labor growth
-  input_time_series_without_exp_compute:
-    name: "input_time_series_without_exp_compute"
-    parent: "dynamic_initial_research_stock"
+    labor_growth_schedule: [[2025, 0.8], [2029, 0.7], [2030, 0.6], [2031, 0.5]]  # List of [year, rate] pairs for annual labor growth
+    initial_research_stock: 30
+  compute_input_time_series_with_stock_30:
+    name: "compute_input_time_series_with_stock_30"
+    parent: "labor_input_time_series_with_stock_30"
     color: "#003000"
     compute_schedule: [[2028, 0.42]]  # List of [year, rate] pairs
-    labor_growth_schedule: [[2025, 0.5], [2025.6, 0.8], [2029, 0.7], [2030, 0.6], [2031, 0.5]]  # List of [year, rate] pairs for annual labor growth
+  no_internal_external_gap_stock_30:
+    name: "no_internal_external_gap_stock_30"
+    parent: "compute_input_time_series_with_stock_30"
+    color: "#003000"
+    distributions:
+      announcement_delay_ci: [0.0001, 0.00011]  # Announcement delay in months
   model_experiment_compute:
     name: "model_experiment_compute"
     parent: "use_calendar_days"
     color: "#003000"
     model_experiment_compute: True
-  no_internal_external_gap:
-    name: "no_internal_external_gap"
-    parent: "model_experiment_compute"
-    color: "#003000"
-    distributions:
-      announcement_delay_ci: [0.0001, 0.00011]  # Announcement delay in months
+    initial_research_stock: 1280
+    experiment_compute_growth_schedule: [[2025, 3.9], [2028, 3.5], [2027, 3.0], [2028, 2.7], [2029, 2.8], [2030, 2.0], [2031, 1.8]]  # List of [year, rate] pairs
+  # model_experiment_compute_diff_growth_rate:
+  #   name: "model_experiment_compute_diff_growth_rate"
+  #   parent: "model_experiment_compute"
+  #   color: "#003000"
+  #   experiment_compute_growth_schedule: [[2025, 3.9], [2028, 3.1], [2029, 1.84], [2030, 1.6], [2031, 1.38]] 
   input_time_series_with_exp_compute:
     name: "input_time_series_with_exp_compute"
-    parent: "no_internal_external_gap"
+    parent: "model_experiment_compute"
     color: "#003000"
     compute_schedule: [[2028, 0.42]]  # List of [year, rate] pairs
     labor_growth_schedule: [[2025, 0.8], [2029, 0.7], [2030, 0.6], [2031, 0.5]]  # List of [year, rate] pairs for annual labor growth
+  no_internal_external_gap_exp_compute:
+    name: "no_internal_external_gap_exp_compute"
+    parent: "input_time_series_with_exp_compute"
+    color: "#003000"
+    distributions:
+      announcement_delay_ci: [0.0001, 0.00011]  # Announcement delay in months
   no_automation:
     name: "no_automation"
     parent: "input_time_series_with_exp_compute"

@@ -377,7 +377,7 @@ def run_median_trajectory_with_growth_dynamics(
         experiment_compute_growth_schedule = forecaster_config.get("experiment_compute_growth_schedule", config["simulation"].get("experiment_compute_growth_schedule", None))
     else:
         labor_pool = config["simulation"]["initial_labor_pool"]
-        research_stock = config["simulation"]["initial_research_stock"]
+        research_stock = forecaster_config.get("initial_research_stock", config["simulation"]["initial_research_stock"])
     labor_power = config["simulation"]["labor_power"]
 
     # Check if dynamic initial research stock calculation is enabled
@@ -778,7 +778,6 @@ def plot_forecaster_comparison(
         'research_stock': '#d62728',      # red
         'research_effort': '#2ca02c',     # green
         'software_mult': '#ff7f0e',       # orange
-        'relative_sw_progress': '#e377c2', # pink
         'experiment_compute': '#9467bd',  # purple
         'relative_effort_growth': '#17becf',  # cyan
     }
@@ -792,25 +791,26 @@ def plot_forecaster_comparison(
         # Plot key metrics
         research_stock = [d["research_stock"] for d in growth_dynamics]
         research_effort = [d["research_contribution_annualized"] for d in growth_dynamics]
+        # Use human-only (pre-progress-multiplier) effort for relative growth rate calculation
+        human_only_effort = [d["human_only_research_contribution_annualized"] for d in growth_dynamics]
         experiment_compute = [d["experiment_compute"] for d in growth_dynamics]
         software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
-        relative_sw_progress = [d["relative_software_progress_rate"] for d in growth_dynamics]
 
-        # Calculate relative growth rate of research effort (current growth / initial growth)
+        # Calculate relative growth rate of human-only research effort (current growth / initial growth)
         # Growth rate at each point is (effort[i+1] - effort[i]) / effort[i], annualized
         effort_growth_rates = []
-        for i in range(len(research_effort)):
+        for i in range(len(human_only_effort)):
             if i == 0:
                 # For first point, use forward difference
-                if len(research_effort) > 1:
+                if len(human_only_effort) > 1:
                     dt_years = years[1] - years[0]
-                    growth_rate = (research_effort[1] / research_effort[0]) ** (1 / dt_years) - 1
+                    growth_rate = (human_only_effort[1] / human_only_effort[0]) ** (1 / dt_years) - 1
                 else:
                     growth_rate = 0
             else:
                 dt_years = years[i] - years[i-1]
-                if dt_years > 0 and research_effort[i-1] > 0:
-                    growth_rate = (research_effort[i] / research_effort[i-1]) ** (1 / dt_years) - 1
+                if dt_years > 0 and human_only_effort[i-1] > 0:
+                    growth_rate = (human_only_effort[i] / human_only_effort[i-1]) ** (1 / dt_years) - 1
                 else:
                     growth_rate = 0
             effort_growth_rates.append(growth_rate)
@@ -823,9 +823,7 @@ def plot_forecaster_comparison(
                 color=metric_colors['research_stock'], linewidth=2, linestyle=linestyle)
         ax.plot(years, research_effort, label=f"{forecaster_name}: Research Effort",
                 color=metric_colors['research_effort'], linewidth=2, linestyle=linestyle)
-        ax.plot(years, relative_sw_progress, label=f"{forecaster_name}: Relative SW Progress Rate",
-                color=metric_colors['relative_sw_progress'], linewidth=2, linestyle=linestyle)
-        ax.plot(years, relative_effort_growth, label=f"{forecaster_name}: Relative Effort Growth Rate",
+        ax.plot(years, relative_effort_growth, label=f"{forecaster_name}: Relative Effort Growth Rate (Human Inputs)",
                 color=metric_colors['relative_effort_growth'], linewidth=2, linestyle=linestyle)
         if experiment_compute[0] is not None:
             ax.plot(years, experiment_compute, label=f"{forecaster_name}: Experiment Compute",
@@ -850,6 +848,118 @@ def plot_forecaster_comparison(
 
     # Legend
     ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"] - 4, framealpha=0.9)
+
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(45)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    return fig
+
+
+def plot_forecaster_comparison_zoomed(
+    growth_dynamics_list: list[tuple[str, list]],
+    config: dict,
+    output_path: Path,
+) -> plt.Figure:
+    """Plot zoomed comparison showing relative effort growth rates and software multiplier.
+
+    Args:
+        growth_dynamics_list: List of (forecaster_name, growth_dynamics) tuples
+        config: Configuration dict
+        output_path: Path to save the figure
+    """
+    background_color = config["plotting_style"].get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16) / 255 for i in (0, 2, 4))
+    font_family = config["plotting_style"].get("font", {}).get("family", "monospace")
+    plt.rcParams['font.family'] = font_family
+
+    fig, ax = plt.subplots(figsize=(14, 8), dpi=150, facecolor=bg_rgb)
+    ax.set_facecolor(bg_rgb)
+
+    # Define colors for each metric
+    metric_colors = {
+        'software_mult': '#ff7f0e',       # orange
+        'relative_effort_growth_human': '#17becf',  # cyan
+        'relative_effort_growth_ai': '#2ca02c',  # green
+    }
+
+    for idx, (forecaster_name, growth_dynamics) in enumerate(growth_dynamics_list):
+        # First forecaster is dotted, second is solid
+        is_dotted = (idx == 0)
+        linestyle = ':' if is_dotted else '-'
+        years = [d["year"] for d in growth_dynamics]
+
+        # Get human-only effort, total effort (with AI), and software multiplier
+        human_only_effort = [d["human_only_research_contribution_annualized"] for d in growth_dynamics]
+        total_effort = [d["research_contribution_annualized"] for d in growth_dynamics]
+        software_mult = [d["software_prog_multiplier"] for d in growth_dynamics]
+
+        # Calculate relative growth rate of human-only research effort
+        human_effort_growth_rates = []
+        for i in range(len(human_only_effort)):
+            if i == 0:
+                if len(human_only_effort) > 1:
+                    dt_years = years[1] - years[0]
+                    growth_rate = (human_only_effort[1] / human_only_effort[0]) ** (1 / dt_years) - 1
+                else:
+                    growth_rate = 0
+            else:
+                dt_years = years[i] - years[i-1]
+                if dt_years > 0 and human_only_effort[i-1] > 0:
+                    growth_rate = (human_only_effort[i] / human_only_effort[i-1]) ** (1 / dt_years) - 1
+                else:
+                    growth_rate = 0
+            human_effort_growth_rates.append(growth_rate)
+
+        # Calculate relative growth rate of total research effort (including AI)
+        ai_effort_growth_rates = []
+        for i in range(len(total_effort)):
+            if i == 0:
+                if len(total_effort) > 1:
+                    dt_years = years[1] - years[0]
+                    growth_rate = (total_effort[1] / total_effort[0]) ** (1 / dt_years) - 1
+                else:
+                    growth_rate = 0
+            else:
+                dt_years = years[i] - years[i-1]
+                if dt_years > 0 and total_effort[i-1] > 0:
+                    growth_rate = (total_effort[i] / total_effort[i-1]) ** (1 / dt_years) - 1
+                else:
+                    growth_rate = 0
+            ai_effort_growth_rates.append(growth_rate)
+
+        # Normalize by initial growth rate (use human initial rate for both)
+        initial_human_growth_rate = human_effort_growth_rates[0] if human_effort_growth_rates[0] != 0 else 1
+        initial_ai_growth_rate = ai_effort_growth_rates[0] if ai_effort_growth_rates[0] != 0 else 1
+        relative_effort_growth_human = [g / initial_human_growth_rate if initial_human_growth_rate != 0 else 0 for g in human_effort_growth_rates]
+        relative_effort_growth_ai = [g / initial_ai_growth_rate if initial_ai_growth_rate != 0 else 0 for g in ai_effort_growth_rates]
+
+        ax.plot(years, relative_effort_growth_human, label=f"{forecaster_name}: Relative Effort Growth Rate (Human Inputs)",
+                color=metric_colors['relative_effort_growth_human'], linewidth=2, linestyle=linestyle)
+        ax.plot(years, relative_effort_growth_ai, label=f"{forecaster_name}: Relative Effort Growth Rate (Incl. AI)",
+                color=metric_colors['relative_effort_growth_ai'], linewidth=2, linestyle=linestyle)
+        ax.plot(years, software_mult, label=f"{forecaster_name}: Software Progress Multiplier",
+                color=metric_colors['software_mult'], linewidth=2, linestyle=linestyle)
+
+    # Configure plot
+    ax.set_title("Growth Dynamics: Effort Growth & Software Multiplier",
+                 fontsize=config["plotting_style"]["font"]["sizes"]["title"])
+    ax.set_xlabel("Year", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Value (log scale)", fontsize=config["plotting_style"]["font"]["sizes"]["axis_labels"])
+    ax.set_yscale("log")
+
+    # Grid and spines
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=config["plotting_style"]["font"]["sizes"]["legend"] - 2, framealpha=0.9)
 
     # Configure ticks
     ax.tick_params(axis="both", labelsize=config["plotting_style"]["font"]["sizes"]["ticks"])
@@ -1654,7 +1764,7 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             experiment_compute_growth_schedule = forecaster_config.get("experiment_compute_growth_schedule", simulation_config.get("experiment_compute_growth_schedule", None))
         else:
             labor_pool = simulation_config["initial_labor_pool"]
-            research_stock = simulation_config["initial_research_stock"]
+            research_stock = forecaster_config.get("initial_research_stock", simulation_config["initial_research_stock"])
         labor_power = simulation_config["labor_power"]
 
         # Check if dynamic initial research stock calculation is enabled
@@ -1975,7 +2085,7 @@ def backcast_trajectories(samples: dict, current_horizon: float, dt: float, back
             experiment_compute_growth_schedule = forecaster_config.get("experiment_compute_growth_schedule", simulation_config.get("experiment_compute_growth_schedule", None))
         else:
             labor_pool = simulation_config["initial_labor_pool"]
-            research_stock = simulation_config["initial_research_stock"]
+            research_stock = forecaster_config.get("initial_research_stock", simulation_config["initial_research_stock"])
         labor_power = simulation_config["labor_power"]
 
         # Check if dynamic initial research stock calculation is enabled
